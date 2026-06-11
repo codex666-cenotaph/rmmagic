@@ -1,0 +1,13 @@
+bin/
+dist/
+*.test
+coverage.out
+.env
+.env.*
+node_modules/
+web/dist/
+.DS_Store
+go.work.sum
+rmmagent
+rmmserver
+*.tsbuildinfo

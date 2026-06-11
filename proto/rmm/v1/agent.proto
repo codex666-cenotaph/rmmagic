@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+package rmm.v1;
+
+option go_package = "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/v1;rmmpb";
+
+import "google/protobuf/timestamp.proto";
+
+// Envelope is the single message type exchanged over the persistent
+// agent<->gateway WebSocket connection. Every frame is one Envelope.
+//
+// Delivery semantics: commands are at-least-once. Every server-initiated
+// message carries a unique message_id; agents must treat command
+// redelivery as idempotent (journal of executed command IDs) and ack
+// every message they act on.
+message Envelope {
+  // Unique ID of this message, used for acks and idempotency.
+  string message_id = 1;
+  // For acks/results: the message_id this responds to.
+  string in_reply_to = 2;
+
+  oneof payload {
+    // agent -> server
+    Hello hello = 10;
+    Heartbeat heartbeat = 11;
+    CommandResult command_result = 12;
+    ShellData shell_output = 13;
+    UpdateStatus update_status = 14;
+    Ack ack = 15;
+
+    // server -> agent
+    HelloAck hello_ack = 30;
+    CommandRequest command_request = 31;
+    ShellStart shell_start = 32;
+    ShellData shell_input = 33;
+    ShellResize shell_resize = 34;
+    ShellStop shell_stop = 35;
+    UpdateOffer update_offer = 36;
+    Decommission decommission = 37;
+  }
+}
+
+// Hello is the first frame an agent sends after the connection is
+// authenticated. It carries a state digest so the server can reconcile
+// after reconnects.
+message Hello {
+  uint32 protocol_version = 1;
+  string agent_version = 2;
+  string os = 3;
+  string arch = 4;
+  string hostname = 5;
+  // Command IDs the agent has results buffered for (delivered next).
+  repeated string pending_result_ids = 6;
+}
+
+message HelloAck {
+  // Server time, lets agents detect clock skew for cert validation.
+  google.protobuf.Timestamp server_time = 1;
+  // Heartbeat interval the agent must use, in seconds.
+  uint32 heartbeat_interval_s = 2;
+}
+
+message Heartbeat {
+  google.protobuf.Timestamp sent_at = 1;
+}
+
+message Ack {
+  // Empty: in_reply_to on the Envelope identifies what is acked.
+}
+
+// CommandRequest instructs the agent to execute a job step. The agent
+// must persist the command ID before execution so redelivery after a
+// crash never runs the same command twice.
+message CommandRequest {
+  string command_id = 1;
+  CommandKind kind = 2;
+  // Kind-specific payload (script body ref, package spec, ...),
+  // serialized as JSON validated against the server-side schema.
+  bytes spec = 3;
+  // After this time the agent must not start the command and reports
+  // status EXPIRED instead.
+  google.protobuf.Timestamp expires_at = 4;
+  uint32 timeout_s = 5;
+}
+
+enum CommandKind {
+  COMMAND_KIND_UNSPECIFIED = 0;
+  COMMAND_KIND_SCRIPT = 1;
+  COMMAND_KIND_PACKAGE_INSTALL = 2;
+  COMMAND_KIND_PACKAGE_REMOVE = 3;
+  COMMAND_KIND_INVENTORY_REFRESH = 4;
+  COMMAND_KIND_SELF_UNINSTALL = 5;
+}
+
+message CommandResult {
+  string command_id = 1;
+  CommandStatus status = 2;
+  int32 exit_code = 3;
+  // Inline output, capped (default 1 MiB); overflow is truncated and
+  // truncated=true is set.
+  bytes output = 4;
+  bool truncated = 5;
+  google.protobuf.Timestamp started_at = 6;
+  google.protobuf.Timestamp finished_at = 7;
+}
+
+enum CommandStatus {
+  COMMAND_STATUS_UNSPECIFIED = 0;
+  COMMAND_STATUS_SUCCEEDED = 1;
+  COMMAND_STATUS_FAILED = 2;
+  COMMAND_STATUS_TIMEOUT = 3;
+  COMMAND_STATUS_EXPIRED = 4;
+}
+
+// Remote shell frames are multiplexed over the same connection by
+// session_id. All shell traffic is also recorded server-side.
+message ShellStart {
+  string session_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message ShellData {
+  string session_id = 1;
+  bytes data = 2;
+}
+
+message ShellResize {
+  string session_id = 1;
+  uint32 cols = 2;
+  uint32 rows = 3;
+}
+
+message ShellStop {
+  string session_id = 1;
+}
+
+// UpdateOffer tells the agent a new signed release is available. The
+// agent downloads over HTTPS, verifies sha256 AND the Ed25519 signature
+// against its embedded trusted keys before swapping binaries.
+message UpdateOffer {
+  string version = 1;
+  string url = 2;
+  string sha256 = 3;
+  // minisign/Ed25519 signature over the binary.
+  bytes signature = 4;
+}
+
+message UpdateStatus {
+  string version = 1;
+  UpdatePhase phase = 2;
+  string error = 3;
+}
+
+enum UpdatePhase {
+  UPDATE_PHASE_UNSPECIFIED = 0;
+  UPDATE_PHASE_DOWNLOADING = 1;
+  UPDATE_PHASE_VERIFIED = 2;
+  UPDATE_PHASE_APPLIED = 3;
+  UPDATE_PHASE_ROLLED_BACK = 4;
+  UPDATE_PHASE_FAILED = 5;
+}
+
+// Decommission tells the agent its identity has been revoked. The agent
+// stops reconnecting and, if uninstall is true, removes itself.
+message Decommission {
+  bool uninstall = 1;
+}
