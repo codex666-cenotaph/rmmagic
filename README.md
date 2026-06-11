@@ -27,10 +27,29 @@ make build        # build all Go modules
 make test         # run all tests
 ```
 
-Run the server (all roles in one process):
+Bootstrap the first tenant (privileged DB connection; password via env
+so it stays out of shell args):
 
 ```sh
-cd server && go run ./cmd/rmmserver --roles=api,gateway,worker
+export RMM_DATABASE_URL='postgres://rmm:rmm-dev-only@localhost:5432/rmm?sslmode=disable'
+RMM_BOOTSTRAP_PASSWORD='choose-a-long-password' \
+  go -C server run ./cmd/rmmserver bootstrap \
+  --tenant "My MSP" --slug my-msp --email you@example.com
+```
+
+Run the server (all roles in one process) and the dashboard:
+
+```sh
+RMM_MASTER_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n') \
+RMM_COOKIE_SECURE=false \
+  go -C server run ./cmd/rmmserver --roles=api,gateway,worker
+cd web && npm install && npm run dev   # http://localhost:5173, proxies /api
+```
+
+Integration tests (live RLS tenant-isolation probes, full API flows):
+
+```sh
+make test-integration   # resets the dev database schema
 ```
 
 ## Architecture

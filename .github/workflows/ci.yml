@@ -30,6 +30,49 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go test -race ./...
 
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rmm
+          POSTGRES_PASSWORD: rmm-ci
+          POSTGRES_DB: rmm
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rmm"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - name: Integration tests (RLS isolation probes, API flows)
+        working-directory: server
+        env:
+          RMM_TEST_DATABASE_URL: postgres://rmm:rmm-ci@localhost:5432/rmm?sslmode=disable
+        run: go test ./internal/api/ -run TestAPIIntegration -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build dashboard
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
   security:
     runs-on: ubuntu-latest
     steps:

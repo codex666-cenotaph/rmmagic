@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 DATABASE_URL ?= postgres://rmm:rmm-dev-only@localhost:5432/rmm?sslmode=disable
 
-.PHONY: build test lint vet proto migrate-up migrate-down dev-stack dev-stack-down e2e clean
+.PHONY: build test test-integration lint vet proto migrate-up migrate-down dev-stack dev-stack-down e2e clean
 
 build:
 	cd server && go build ./...
@@ -12,6 +12,11 @@ test:
 	cd server && go test ./...
 	cd agent && go test ./...
 	cd shared && go test ./...
+
+# Integration tests (RLS tenant-isolation probes, full API flows) need a
+# real Postgres; they reset the schema of the target database.
+test-integration: dev-stack
+	cd server && RMM_TEST_DATABASE_URL="$(DATABASE_URL)" go test ./internal/api/ -run TestAPIIntegration -v
 
 vet:
 	cd server && go vet ./...

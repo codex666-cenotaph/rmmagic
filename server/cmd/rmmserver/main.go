@@ -2,6 +2,14 @@
 // gateway, worker) live in this one binary and are enabled with
 // --roles; at small scale run all of them in one process, at large
 // scale run dedicated pools per role behind the same image.
+//
+// Subcommands:
+//
+//	rmmserver [--roles=...] [--listen=...]   serve (default)
+//	rmmserver bootstrap --tenant NAME --slug SLUG --email EMAIL
+//	    creates the first tenant + owner; password read from
+//	    RMM_BOOTSTRAP_PASSWORD. Requires a privileged DB connection
+//	    (RMM_APP_ROLE empty), since RLS blocks tenant creation otherwise.
 package main
 
 import (
@@ -17,34 +25,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/codex666-cenotaph/rmmagic/server/internal/api"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
 )
 
-type config struct {
-	roles      map[string]bool
-	listenAddr string
-}
+func main() {
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(log)
 
-func parseConfig() (config, error) {
-	cfg := config{roles: map[string]bool{}}
-	roles := flag.String("roles", "api,gateway,worker", "comma-separated roles to run: api,gateway,worker")
-	flag.StringVar(&cfg.listenAddr, "listen", envOr("RMM_LISTEN", ":8080"), "HTTP listen address")
-	flag.Parse()
-
-	for _, r := range strings.Split(*roles, ",") {
-		r = strings.TrimSpace(r)
-		switch r {
-		case "api", "gateway", "worker":
-			cfg.roles[r] = true
-		case "":
-		default:
-			return cfg, fmt.Errorf("unknown role %q", r)
-		}
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap" {
+		runBootstrap(log, os.Args[2:])
+		return
 	}
-	if len(cfg.roles) == 0 {
-		return cfg, errors.New("at least one role is required")
-	}
-	return cfg, nil
+	runServe(log)
 }
 
 func envOr(key, def string) string {
@@ -54,14 +50,64 @@ func envOr(key, def string) string {
 	return def
 }
 
-func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(log)
-
-	cfg, err := parseConfig()
-	if err != nil {
-		log.Error("invalid configuration", "error", err)
+func openStore(ctx context.Context, log *slog.Logger, appRole string) *store.Store {
+	dsn := os.Getenv("RMM_DATABASE_URL")
+	if dsn == "" {
+		log.Error("RMM_DATABASE_URL is required")
 		os.Exit(2)
+	}
+	st, err := store.Open(ctx, dsn, appRole)
+	if err != nil {
+		log.Error("database connection failed", "error", err)
+		os.Exit(1)
+	}
+	return st
+}
+
+func runBootstrap(log *slog.Logger, args []string) {
+	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
+	tenant := fs.String("tenant", "", "tenant (MSP) display name")
+	slug := fs.String("slug", "", "tenant slug")
+	email := fs.String("email", "", "owner email")
+	_ = fs.Parse(args)
+
+	password := os.Getenv("RMM_BOOTSTRAP_PASSWORD")
+	if password == "" {
+		log.Error("set RMM_BOOTSTRAP_PASSWORD (not a flag, to keep it out of shell history args)")
+		os.Exit(2)
+	}
+
+	ctx := context.Background()
+	// Privileged connection: no SET ROLE, so tenant creation passes RLS.
+	st := openStore(ctx, log, "")
+	defer st.Close()
+
+	id, err := bootstrap.Run(ctx, st, bootstrap.Input{
+		TenantName: *tenant, Slug: *slug, Email: *email, Password: password,
+	})
+	if err != nil {
+		log.Error("bootstrap failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("tenant bootstrapped", "tenant_id", id.String(), "owner", *email)
+}
+
+func runServe(log *slog.Logger) {
+	var listenAddr string
+	roles := flag.String("roles", "api,gateway,worker", "comma-separated roles to run: api,gateway,worker")
+	flag.StringVar(&listenAddr, "listen", envOr("RMM_LISTEN", ":8080"), "HTTP listen address")
+	flag.Parse()
+
+	enabled := map[string]bool{}
+	for _, r := range strings.Split(*roles, ",") {
+		switch r = strings.TrimSpace(r); r {
+		case "api", "gateway", "worker":
+			enabled[r] = true
+		case "":
+		default:
+			log.Error("unknown role", "role", r)
+			os.Exit(2)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -78,8 +124,22 @@ func main() {
 			version.Version, version.Commit, version.ProtocolVersion)
 	})
 
-	srv := &http.Server{
-		Addr:              cfg.listenAddr,
+	if enabled["api"] {
+		box, err := secrets.NewBox(os.Getenv("RMM_MASTER_KEY"))
+		if err != nil {
+			log.Error("RMM_MASTER_KEY invalid", "error", err)
+			os.Exit(2)
+		}
+		st := openStore(ctx, log, envOr("RMM_APP_ROLE", "rmm_app"))
+		defer st.Close()
+
+		cookieSecure := envOr("RMM_COOKIE_SECURE", "true") != "false"
+		srv := api.NewServer(st, box, log, cookieSecure)
+		mux.Handle("/api/v1/", srv.Handler())
+	}
+
+	httpSrv := &http.Server{
+		Addr:              listenAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -87,10 +147,8 @@ func main() {
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("rmmserver starting",
-			"version", version.Version,
-			"roles", rolesList(cfg.roles),
-			"listen", cfg.listenAddr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			"version", version.Version, "roles", *roles, "listen", listenAddr)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -100,19 +158,11 @@ func main() {
 		log.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil {
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 			log.Error("shutdown error", "error", err)
 		}
 	case err := <-errCh:
 		log.Error("server failed", "error", err)
 		os.Exit(1)
 	}
-}
-
-func rolesList(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for r := range m {
-		out = append(out, r)
-	}
-	return out
 }
