@@ -22,6 +22,7 @@ import (
 	agentexec "github.com/codex666-cenotaph/rmmagic/agent/internal/exec"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/identity"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/platform"
+	"github.com/codex666-cenotaph/rmmagic/agent/internal/winsvc"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
 )
 
@@ -87,9 +88,18 @@ func main() {
 			os.Exit(1)
 		}
 
+		log.Info("rmmagent starting", "version", version.Version, "device_id", id.DeviceID)
+
+		if winsvc.IsService() {
+			if err := winsvc.Run(winsvc.ServiceName, agent, log); err != nil {
+				log.Error("service run failed", "error", err)
+				os.Exit(1)
+			}
+			return
+		}
+
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		log.Info("rmmagent starting", "version", version.Version, "device_id", id.DeviceID)
 
 		if err := agent.Run(ctx); err != nil {
 			if errors.Is(err, conn.ErrDecommissioned) {
@@ -102,6 +112,28 @@ func main() {
 			os.Exit(1)
 		}
 
+	case "install-service":
+		fs := flag.NewFlagSet("install-service", flag.ExitOnError)
+		stateDir := fs.String("state-dir", defaultStateDir, "directory for the device identity")
+		_ = fs.Parse(os.Args[2:])
+		exe, err := os.Executable()
+		if err != nil {
+			log.Error("cannot determine executable path", "error", err)
+			os.Exit(1)
+		}
+		if err := winsvc.Install(exe, *stateDir); err != nil {
+			log.Error("service installation failed", "error", err)
+			os.Exit(1)
+		}
+		log.Info("service installed", "name", winsvc.ServiceName, "state_dir", *stateDir)
+
+	case "uninstall-service":
+		if err := winsvc.Uninstall(); err != nil {
+			log.Error("service uninstallation failed", "error", err)
+			os.Exit(1)
+		}
+		log.Info("service removed", "name", winsvc.ServiceName)
+
 	default:
 		usage()
 		os.Exit(2)
@@ -109,5 +141,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: rmmagent <enroll|run|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: rmmagent <enroll|run|install-service|uninstall-service|version> [flags]")
 }

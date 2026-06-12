@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v4 package definition for the rmmagic endpoint agent.
+
+  Build:
+    wix build -d ProductVersion=<semver> -o dist/rmmagent-windows-amd64.msi rmmagent.wxs
+
+  The MSI installs the binary and registers it as a Windows service (auto-start,
+  manual trigger — the device must be enrolled before the service will run
+  successfully). Enrollment is done separately:
+
+    rmmagent.exe enroll --server https://rmm.example.com --token rmme_...
+
+  After enrollment the service can be started immediately:
+
+    sc start rmmagent
+
+  or it will start automatically on the next reboot.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="rmmagic endpoint agent"
+    Manufacturer="rmmagic"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="{9A3B5C7D-2E4F-4891-A6B0-C8D1E2F30456}"
+    InstallerVersion="500"
+    Compressed="yes"
+    Scope="perMachine">
+
+    <SummaryInformation Description="rmmagic endpoint agent installer" />
+
+    <!-- Prevent downgrade; silently upgrade same-version reinstalls. -->
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of rmmagic endpoint agent is already installed."
+      AllowSameVersionUpgrades="yes" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="rmmagent" Level="1">
+      <ComponentGroupRef Id="AgentComponents" />
+    </Feature>
+  </Package>
+
+  <!-- Directory layout -->
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="rmmagic" />
+      </Directory>
+      <Directory Id="CommonAppDataFolder">
+        <!-- %ProgramData%\rmmagent — device identity and command journal -->
+        <Directory Id="STATEDIRFOLDER" Name="rmmagent" />
+      </Directory>
+    </Directory>
+  </Fragment>
+
+  <!-- Components -->
+  <Fragment>
+    <ComponentGroup Id="AgentComponents">
+
+      <!-- Main binary + service registration -->
+      <Component Id="AgentBinary" Guid="{1B3D5E7F-9A2B-4C6D-8E0F-A1B2C3D4E5F6}" Directory="INSTALLFOLDER">
+        <File
+          Id="rmmagentEXE"
+          Source="dist/rmmagent-windows-amd64.exe"
+          Name="rmmagent.exe"
+          KeyPath="yes" />
+
+        <ServiceInstall
+          Id="rmmagentSvc"
+          Name="rmmagent"
+          DisplayName="rmmagic endpoint agent"
+          Description="Monitors and manages this endpoint via the rmmagic platform."
+          Type="ownProcess"
+          Start="auto"
+          ErrorControl="normal"
+          Account="LocalSystem"
+          Arguments="run" />
+
+        <!-- Stop on upgrade/uninstall; remove entry on uninstall. -->
+        <ServiceControl
+          Id="rmmagentStop"
+          Name="rmmagent"
+          Stop="both"
+          Remove="uninstall"
+          Wait="yes" />
+      </Component>
+
+      <!-- State directory with restricted permissions -->
+      <Component Id="StateDir" Guid="{2C4D6F8A-0B3C-5D7E-9F1A-B2C3D4E5F601}" Directory="STATEDIRFOLDER">
+        <CreateFolder>
+          <Permission User="SYSTEM" GenericAll="yes" />
+          <Permission User="Administrators" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+</Wix>
