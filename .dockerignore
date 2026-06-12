@@ -1,0 +1,10 @@
+.git
+.github
+**/node_modules
+**/.env
+bin/
+docs/
+proto/
+*.md
+**/*_test.go
+web/dist
