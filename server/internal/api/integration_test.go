@@ -496,6 +496,29 @@ func testScriptsFlow(t *testing.T, baseURL string, alpha, beta *client, siteID s
 	}
 	beta.get(t, "/api/v1/jobs/"+jobID, 404)
 
+	// Intra-tenant scope: a technician scoped to a *different* customer
+	// must not see jobs for this device, even on the unfiltered list.
+	// (Guards the scope filter in handleListJobs.)
+	otherCust := alpha.post(t, "/api/v1/customers", obj{"name": "Scope Probe Co"}, 201)
+	scopedTech := alpha.post(t, "/api/v1/users",
+		obj{"email": "scoped-tech@alpha.test", "password": "scoped-tech-pass-1"}, 201)
+	var techRoleID string
+	for _, rr := range alpha.get(t, "/api/v1/roles", 200)["roles"].([]any) {
+		if rr.(map[string]any)["name"] == "Technician" {
+			techRoleID = rr.(map[string]any)["id"].(string)
+		}
+	}
+	alpha.post(t, "/api/v1/users/"+scopedTech["id"].(string)+"/assignments",
+		obj{"role_id": techRoleID, "scope_type": "customer", "scope_id": otherCust["id"]}, 201)
+	scopedClient := newClient(t, baseURL)
+	scopedClient.post(t, "/api/v1/auth/login",
+		obj{"email": "scoped-tech@alpha.test", "password": "scoped-tech-pass-1"}, 200)
+	if n := len(scopedClient.get(t, "/api/v1/jobs", 200)["jobs"].([]any)); n != 0 {
+		t.Fatalf("out-of-scope technician must see 0 jobs on the unfiltered list, got %d", n)
+	}
+	// And cannot read the specific job either.
+	scopedClient.get(t, "/api/v1/jobs/"+jobID, 404)
+
 	// --- Offline queue: create job while device is disconnected ---
 	ws.Close(websocket.StatusNormalClosure, "")
 	time.Sleep(100 * time.Millisecond) // let the server detect disconnect
@@ -547,9 +570,16 @@ func testScriptsFlow(t *testing.T, baseURL string, alpha, beta *client, siteID s
 		t.Fatalf("offline job should be failed, got %q", offlineStatus)
 	}
 
-	// --- Archive script: archived scripts cannot be dispatched ---
+	// --- Archive script: excluded from the default list, still
+	// retrievable by ID, and no longer dispatchable. ---
 	alpha.req(t, "DELETE", "/api/v1/scripts/"+scriptID, nil, 200)
-	alpha.get(t, "/api/v1/scripts/"+scriptID, 404) // not in default list
+	if n := len(alpha.get(t, "/api/v1/scripts", 200)["scripts"].([]any)); n != 0 {
+		t.Fatalf("archived script must not appear in default list, got %d", n)
+	}
+	detail := alpha.get(t, "/api/v1/scripts/"+scriptID, 200)
+	if detail["archived"] != true {
+		t.Fatalf("script should be marked archived, got %v", detail["archived"])
+	}
 	archived := alpha.get(t, "/api/v1/scripts?archived=true", 200)["scripts"].([]any)
 	if len(archived) != 1 {
 		t.Fatalf("archived list should have 1 entry, got %d", len(archived))

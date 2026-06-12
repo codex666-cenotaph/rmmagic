@@ -152,7 +152,8 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 		return err
 	}
 	defer ws.Close(websocket.StatusNormalClosure, "")
-	ws.SetReadLimit(1 << 20)
+	// Headroom above a 1 MiB script body plus protobuf framing.
+	ws.SetReadLimit(2 << 20)
 
 	// Challenge-response authentication.
 	env, err := read(ctx, ws)

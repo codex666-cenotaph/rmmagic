@@ -30,7 +30,10 @@ const (
 	heartbeatInterval = 30 * time.Second
 	// Connections silent for 3 intervals are presumed dead.
 	readDeadline = 3 * heartbeatInterval
-	maxFrameSize = 1 << 20
+	// Agents cap command output at 1 MiB; the CommandResult envelope adds
+	// protobuf framing on top, so the read limit must exceed 1 MiB or a
+	// max-output result would overflow and drop the connection.
+	maxFrameSize = 2 << 20
 )
 
 type Gateway struct {
@@ -262,7 +265,7 @@ func buildScriptSpec(language, body string, params json.RawMessage) ([]byte, err
 // DispatchJob sends a script job to a connected device. Returns true if
 // the device was online and the frame was sent.
 func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uuid.UUID, commandID string) bool {
-	spec, err := g.jobSpecForCommand(ctx, tenantID, commandID)
+	spec, timeoutS, err := g.jobSpecForCommand(ctx, tenantID, commandID)
 	if err != nil {
 		g.Log.Error("dispatch job spec failed", "job_id", jobID, "error", err)
 		return false
@@ -273,12 +276,14 @@ func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uui
 			CommandId: commandID,
 			Kind:      rmmpb.CommandKind_COMMAND_KIND_SCRIPT,
 			Spec:      spec,
+			TimeoutS:  uint32(timeoutS),
 		}},
 	})
 }
 
-func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, commandID string) ([]byte, error) {
+func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, commandID string) ([]byte, int, error) {
 	var spec []byte
+	var timeoutS int
 	err := g.Store.WithTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT language, script_body, parameters, timeout_s FROM jobs WHERE command_id=$1`, commandID)
@@ -291,14 +296,13 @@ func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, com
 		}
 		var lang, body string
 		var params json.RawMessage
-		var timeoutS int
 		if err := rows.Scan(&lang, &body, &params, &timeoutS); err != nil {
 			return err
 		}
 		spec, err = buildScriptSpec(lang, body, params)
 		return err
 	})
-	return spec, err
+	return spec, timeoutS, err
 }
 
 // touch updates last_seen_at, throttled so heartbeats don't write the

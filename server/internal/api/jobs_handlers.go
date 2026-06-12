@@ -58,7 +58,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		deviceFilter = &id
 	}
 
-	var jobs []store.Job
+	out := []jobJSON{}
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
 		// If filtering by device, verify the caller can see it first.
 		if deviceFilter != nil {
@@ -66,17 +66,34 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		var err error
-		jobs, err = store.ListJobs(ctx, tx, deviceFilter, 200)
-		return err
+		jobs, err := store.ListJobs(ctx, tx, deviceFilter, 200)
+		if err != nil {
+			return err
+		}
+		// Scope-filter: a job is visible only if the caller may read the
+		// device it ran on. Mirrors handleListDevices so a customer- or
+		// site-scoped principal cannot enumerate other customers' jobs.
+		all := p.HasTenantWide(auth.PermDevicesRead)
+		allowedCustomers := map[uuid.UUID]bool{}
+		if !all {
+			for _, id := range p.CustomerIDsWith(auth.PermDevicesRead) {
+				allowedCustomers[id] = true
+			}
+		}
+		for _, j := range jobs {
+			if all || allowedCustomers[j.CustomerID] {
+				out = append(out, toJobJSON(j))
+				continue
+			}
+			if requireInTx(ctx, tx, auth.PermDevicesRead, auth.Scope{Type: auth.ScopeSite, ID: j.SiteID}) == nil {
+				out = append(out, toJobJSON(j))
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		writeStoreError(w, err)
 		return
-	}
-	out := make([]jobJSON, 0, len(jobs))
-	for _, j := range jobs {
-		out = append(out, toJobJSON(j))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": out})
 }
@@ -129,7 +146,10 @@ func (s *Server) handleGetJobOutput(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"output":    out.Output,
+		"exit_code": out.ExitCode,
+	})
 }
 
 type dispatchReq struct {

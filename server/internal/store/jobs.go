@@ -16,6 +16,8 @@ type Job struct {
 	ScriptID   uuid.UUID
 	ScriptName string
 	DeviceID   uuid.UUID
+	SiteID     uuid.UUID // for scope filtering
+	CustomerID uuid.UUID // for scope filtering
 	Hostname   string
 	CommandID  string
 	Status     string
@@ -45,17 +47,18 @@ type PendingJob struct {
 }
 
 const jobSelect = `
-	SELECT j.id, j.script_id, s.name, j.device_id, d.hostname,
+	SELECT j.id, j.script_id, s.name, j.device_id, d.site_id, si.customer_id, d.hostname,
 	       j.command_id, j.status, j.timeout_s, j.language, j.parameters,
 	       j.created_at, j.sent_at, j.started_at, j.finished_at
 	FROM jobs j
 	JOIN scripts s ON s.id = j.script_id
-	JOIN devices d ON d.id = j.device_id`
+	JOIN devices d ON d.id = j.device_id
+	JOIN sites si ON si.id = d.site_id`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(
-		&j.ID, &j.ScriptID, &j.ScriptName, &j.DeviceID, &j.Hostname,
+		&j.ID, &j.ScriptID, &j.ScriptName, &j.DeviceID, &j.SiteID, &j.CustomerID, &j.Hostname,
 		&j.CommandID, &j.Status, &j.TimeoutS, &j.Language, &j.Parameters,
 		&j.CreatedAt, &j.SentAt, &j.StartedAt, &j.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
