@@ -1,6 +1,8 @@
 module github.com/codex666-cenotaph/rmmagic/server
 
-go 1.25.0
+go 1.25.11
+
+toolchain go1.25.11
 
 require github.com/codex666-cenotaph/rmmagic/shared v0.0.0
 
