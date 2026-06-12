@@ -11,3 +11,5 @@ go.work.sum
 rmmagent
 rmmserver
 *.tsbuildinfo
+.run/
+deploy/rmmagic.env
