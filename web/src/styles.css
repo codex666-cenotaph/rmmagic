@@ -253,6 +253,21 @@ label {
   padding: 8px 18px;
   font-size: 14px;
   border-left: 3px solid transparent;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nav-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--sidebar-title);
+  flex-shrink: 0;
+}
+
+.sidebar nav a:hover .nav-icon,
+.sidebar nav a.active .nav-icon {
+  color: currentColor;
 }
 
 .sidebar nav a:hover {

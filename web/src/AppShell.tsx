@@ -1,13 +1,29 @@
-import { useState } from "react";
+import { ComponentType, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { logout } from "./api/client";
 import { useAuth } from "./auth";
 import { useTheme } from "./theme";
+import {
+  AlertsIcon,
+  AuditIcon,
+  CustomersIcon,
+  DashboardIcon,
+  DevicesIcon,
+  EnrollIcon,
+  JobsIcon,
+  PoliciesIcon,
+  SchedulesIcon,
+  ScriptsIcon,
+  SettingsIcon,
+  TokensIcon,
+  UsersIcon,
+} from "./components/icons";
 
 interface NavItem {
   to: string;
   label: string;
+  icon: ComponentType<{ size?: number }>;
   perm?: string;
 }
 
@@ -22,43 +38,63 @@ interface NavGroup {
 const NAV: NavGroup[] = [
   {
     title: "Overview",
-    items: [{ to: "/dashboard", label: "Dashboard" }],
+    items: [{ to: "/dashboard", label: "Dashboard", icon: DashboardIcon }],
   },
   {
     title: "Endpoints",
     items: [
-      { to: "/devices", label: "Devices" },
-      { to: "/enroll", label: "Enrollment", perm: "devices.enroll" },
+      { to: "/devices", label: "Devices", icon: DevicesIcon },
+      {
+        to: "/enroll",
+        label: "Enrollment",
+        icon: EnrollIcon,
+        perm: "devices.enroll",
+      },
     ],
   },
   {
     title: "Monitoring",
     items: [
-      { to: "/alerts", label: "Alerts", perm: "alerts.read" },
-      { to: "/policies", label: "Policies", perm: "policies.read" },
+      { to: "/alerts", label: "Alerts", icon: AlertsIcon, perm: "alerts.read" },
+      {
+        to: "/policies",
+        label: "Policies",
+        icon: PoliciesIcon,
+        perm: "policies.read",
+      },
     ],
   },
   {
     title: "Automation",
     items: [
-      { to: "/scripts", label: "Scripts", perm: "scripts.read" },
-      { to: "/jobs", label: "Jobs", perm: "scripts.read" },
-      { to: "/schedules", label: "Schedules", perm: "scripts.read" },
+      {
+        to: "/scripts",
+        label: "Scripts",
+        icon: ScriptsIcon,
+        perm: "scripts.read",
+      },
+      { to: "/jobs", label: "Jobs", icon: JobsIcon, perm: "scripts.read" },
+      {
+        to: "/schedules",
+        label: "Schedules",
+        icon: SchedulesIcon,
+        perm: "scripts.read",
+      },
     ],
   },
   {
     title: "Organization",
     items: [
-      { to: "/customers", label: "Customers" },
-      { to: "/users", label: "Users" },
-      { to: "/tokens", label: "API Tokens" },
+      { to: "/customers", label: "Customers", icon: CustomersIcon },
+      { to: "/users", label: "Users", icon: UsersIcon },
+      { to: "/tokens", label: "API Tokens", icon: TokensIcon },
     ],
   },
   {
     title: "System",
     items: [
-      { to: "/audit", label: "Audit Log" },
-      { to: "/settings", label: "Settings" },
+      { to: "/audit", label: "Audit Log", icon: AuditIcon },
+      { to: "/settings", label: "Settings", icon: SettingsIcon },
     ],
   },
 ];
@@ -108,16 +144,22 @@ export function AppShell() {
           {groups.map((group) => (
             <div className="nav-group" key={group.title}>
               <div className="nav-group-title">{group.title}</div>
-              {group.items.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  onClick={() => setNavOpen(false)}
-                  className={({ isActive }) => (isActive ? "active" : "")}
-                >
-                  {item.label}
-                </NavLink>
-              ))}
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    onClick={() => setNavOpen(false)}
+                    className={({ isActive }) => (isActive ? "active" : "")}
+                  >
+                    <span className="nav-icon">
+                      <Icon />
+                    </span>
+                    {item.label}
+                  </NavLink>
+                );
+              })}
             </div>
           ))}
         </nav>
