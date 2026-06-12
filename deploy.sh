@@ -78,13 +78,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "  Save this key! You need it every time the server starts."
   echo ""
 
-  cat > "$ENV_FILE" <<EOF
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
-RMM_MASTER_KEY=${GENERATED_KEY}
-RMM_COOKIE_SECURE=${RMM_COOKIE_SECURE}
-HTTP_PORT=${HTTP_PORT}
-EOF
+  {
+    echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
+    echo "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}"
+    echo "RMM_MASTER_KEY=${GENERATED_KEY}"
+    echo "RMM_COOKIE_SECURE=${RMM_COOKIE_SECURE}"
+    echo "HTTP_PORT=${HTTP_PORT}"
+  } > "$ENV_FILE"
   ok ".env created"
   BUILD=true
 fi
