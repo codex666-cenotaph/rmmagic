@@ -1,6 +1,8 @@
 module github.com/codex666-cenotaph/rmmagic/agent
 
-go 1.24.0
+go 1.25.11
+
+toolchain go1.25.11
 
 require (
 	github.com/coder/websocket v1.8.14
