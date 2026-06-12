@@ -30,6 +30,32 @@ jobs:
         working-directory: ${{ matrix.module }}
         run: go test -race ./...
 
+  # The agent must keep cross-compiling for every endpoint OS (Windows agent
+  # phase 1); vet runs per-GOOS so platform-tagged files are checked too.
+  agent-cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [windows, darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: Build (GOOS=${{ matrix.goos }})
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+        run: go build ./...
+      - name: Vet (GOOS=${{ matrix.goos }})
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+        run: go vet ./...
+
   integration:
     runs-on: ubuntu-latest
     services:

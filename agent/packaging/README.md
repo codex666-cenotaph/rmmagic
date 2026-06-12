@@ -19,15 +19,19 @@ path; for building from a source checkout use `deploy/install-agent.sh`.
 
 ```sh
 go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest   # one-time
-make agent-packages          # -> agent/packaging/dist/*.deb, *.rpm (amd64+arm64)
+make agent-packages          # -> dist/*.deb, *.rpm (linux amd64+arm64) + windows .exe
 make agent-binaries          # binaries only, no nfpm needed
 ```
 
 Or directly, with overrides:
 
 ```sh
-VERSION=0.4.0 agent/packaging/build.sh --arches "amd64 arm64"
+VERSION=0.4.0 agent/packaging/build.sh --targets "linux/amd64 linux/arm64 windows/amd64"
 ```
+
+Windows targets produce a bare `rmmagent-windows-<arch>.exe` (static,
+cross-compiled): deploy/packaging for Windows (service wrapper, MSI,
+Authenticode signing) lands in later phases of the Windows agent plan.
 
 The version defaults to `git describe` (leading `v` stripped); untagged
 builds become a `0.0.0-<commit>` semver prerelease so nfpm is happy.

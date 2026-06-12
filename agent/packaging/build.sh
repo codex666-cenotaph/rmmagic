@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 #
-# build.sh — build static rmmagent binaries and package them as .deb/.rpm.
+# build.sh — build static rmmagent binaries and package the Linux ones as
+# .deb/.rpm.
 #
-# Produces, for each target architecture, a stripped static binary plus a
-# Debian and an RPM package, all under agent/packaging/dist/. The version
-# is derived from `git describe` (override with VERSION=…).
+# Produces, for each os/arch target, a stripped static binary under
+# agent/packaging/dist/ (rmmagent-<os>-<arch>[.exe]); Linux targets
+# additionally get a Debian and an RPM package. The version is derived
+# from `git describe` (override with VERSION=…).
 #
 # Usage:
-#   agent/packaging/build.sh [--arches "amd64 arm64"] [--bin-only]
+#   agent/packaging/build.sh [--targets "linux/amd64 windows/amd64"] [--bin-only]
 #
 # Env overrides:
 #   VERSION   package/binary version       (default: git describe, sans "v")
-#   ARCHES    space-separated GOARCH list   (default: amd64 arm64)
-#   DIST      output directory              (default: agent/packaging/dist)
+#   TARGETS   space-separated GOOS/GOARCH  (default: linux/amd64 linux/arm64 windows/amd64)
+#   DIST      output directory             (default: agent/packaging/dist)
 #
-# Requires: go, and (unless --bin-only) nfpm
+# Requires: go, and (unless --bin-only or no linux targets) nfpm
 #   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
 set -euo pipefail
@@ -23,15 +25,15 @@ PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_DIR="$(cd "$PKG_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$AGENT_DIR/.." && pwd)"
 
-ARCHES="${ARCHES:-amd64 arm64}"
+TARGETS="${TARGETS:-linux/amd64 linux/arm64 windows/amd64}"
 DIST="${DIST:-$PKG_DIR/dist}"
 BIN_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --arches)   ARCHES="$2"; shift 2 ;;
+    --targets)  TARGETS="$2"; shift 2 ;;
     --bin-only) BIN_ONLY=1; shift ;;
-    -h|--help)  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -41,7 +43,7 @@ die() { printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2; exit 1; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
 have go || die "go toolchain not found in PATH"
-if [[ "$BIN_ONLY" == 0 ]]; then
+if [[ "$BIN_ONLY" == 0 && "$TARGETS" == *linux/* ]]; then
   have nfpm || die "nfpm not found. Install: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest (or pass --bin-only)"
 fi
 
@@ -64,22 +66,30 @@ VPKG="github.com/codex666-cenotaph/rmmagic/shared/version"
 LDFLAGS="-s -w -X ${VPKG}.Version=${VERSION} -X ${VPKG}.Commit=${COMMIT}"
 
 rm -rf "$DIST"; mkdir -p "$DIST"
-log "Version ${VERSION} (commit ${COMMIT}); arches: ${ARCHES}"
+log "Version ${VERSION} (commit ${COMMIT}); targets: ${TARGETS}"
 
-for arch in $ARCHES; do
-  log "Building rmmagent for linux/${arch}"
-  ( cd "$AGENT_DIR" && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-      go build -trimpath -ldflags "$LDFLAGS" -o "$DIST/rmmagent-${arch}" ./cmd/rmmagent )
+for target in $TARGETS; do
+  goos="${target%/*}"; goarch="${target#*/}"
+  [[ "$goos" == "$target" || -z "$goos" || -z "$goarch" ]] && die "bad target '$target' (want GOOS/GOARCH, e.g. linux/amd64)"
 
-  [[ "$BIN_ONLY" == 1 ]] && continue
+  ext=""; [[ "$goos" == windows ]] && ext=".exe"
+  out="$DIST/rmmagent-${goos}-${goarch}${ext}"
+
+  log "Building rmmagent for ${goos}/${goarch}"
+  ( cd "$AGENT_DIR" && CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+      go build -trimpath -ldflags "$LDFLAGS" -o "$out" ./cmd/rmmagent )
+
+  # deb/rpm packaging applies to Linux targets only (Windows gets an MSI in
+  # a later phase; until then the .exe itself is the artifact).
+  [[ "$BIN_ONLY" == 1 || "$goos" != linux ]] && continue
 
   # Stage this arch's binary at the fixed path nfpm.yaml references, then run
   # nfpm from the packaging dir so its relative `src` paths resolve.
   mkdir -p "$PKG_DIR/.staging"
-  cp "$DIST/rmmagent-${arch}" "$PKG_DIR/.staging/rmmagent"
+  cp "$out" "$PKG_DIR/.staging/rmmagent"
   for packager in deb rpm; do
-    log "Packaging .${packager} for ${arch}"
-    ( cd "$PKG_DIR" && PKG_VERSION="$VERSION" PKG_ARCH="$arch" \
+    log "Packaging .${packager} for ${goarch}"
+    ( cd "$PKG_DIR" && PKG_VERSION="$VERSION" PKG_ARCH="$goarch" \
         nfpm package --config nfpm.yaml --packager "$packager" --target "$DIST" )
   done
   rm -rf "$PKG_DIR/.staging"
