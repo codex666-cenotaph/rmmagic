@@ -212,6 +212,7 @@ func TestAPIIntegration(t *testing.T) {
 	newClient(t, ts.URL).post(t, "/api/v1/auth/login", obj{"email": "ghost@nowhere.test", "password": "wrong-password-x"}, 401)
 
 	testDeviceFlow(t, ts.URL, alpha, beta, siteID)
+	testScriptsFlow(t, ts.URL, alpha, beta, siteID)
 }
 
 // testDeviceFlow exercises M2: enrollment, gateway auth, heartbeat,
@@ -365,6 +366,196 @@ func testDeviceFlow(t *testing.T, baseURL string, alpha, beta *client, siteID st
 		"token": tok2["token"].(string), "hostname": "x", "os": "linux", "arch": "amd64",
 		"agent_version": "t", "pubkey": base64.StdEncoding.EncodeToString(pub),
 	}, 401)
+}
+
+// testScriptsFlow exercises M3: script CRUD, job dispatch (online and
+// offline), CommandResult ingestion, output retrieval, and cross-tenant
+// isolation of scripts and jobs.
+func testScriptsFlow(t *testing.T, baseURL string, alpha, beta *client, siteID string) {
+	t.Helper()
+	ctx := context.Background()
+
+	// --- Script CRUD ---
+	sc := alpha.post(t, "/api/v1/scripts", obj{
+		"name": "Hello Script", "description": "prints hello",
+		"language": "bash", "body": "#!/bin/bash\necho hello",
+		"parameters": []any{},
+	}, 201)
+	scriptID := sc["id"].(string)
+
+	list := alpha.get(t, "/api/v1/scripts", 200)["scripts"].([]any)
+	if len(list) != 1 {
+		t.Fatalf("expected 1 script, got %d", len(list))
+	}
+	alpha.req(t, "PATCH", "/api/v1/scripts/"+scriptID, obj{
+		"name": "Hello Script v2", "description": "prints hello",
+		"language": "bash", "body": "#!/bin/bash\necho hello v2",
+		"parameters": []any{},
+	}, 200)
+
+	// Cross-tenant: beta cannot see alpha's scripts.
+	if n := len(beta.get(t, "/api/v1/scripts", 200)["scripts"].([]any)); n != 0 {
+		t.Fatalf("beta must see 0 scripts, got %d", n)
+	}
+	beta.get(t, "/api/v1/scripts/"+scriptID, 404)
+
+	// --- Enroll a fresh device for job testing ---
+	tok := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 201)
+	enrollToken := tok["token"].(string)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anon := newClient(t, baseURL)
+	enrolled := anon.post(t, "/agent/v1/enroll", obj{
+		"token": enrollToken, "hostname": "job-box", "os": "linux", "arch": "amd64",
+		"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+	}, 201)
+	deviceID := enrolled["device_id"].(string)
+
+	// Connect to gateway.
+	wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/agent/v1/connect"
+	connectAndAuth := func() *websocket.Conn {
+		ws, _, err := websocket.Dial(ctx, wsURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := wsRead(t, ctx, ws)
+		wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_AuthResponse{
+			AuthResponse: &rmmpb.AuthResponse{DeviceId: deviceID, Signature: devicesig.SignChallenge(priv, env.GetAuthChallenge().GetNonce())},
+		}})
+		wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_Hello{Hello: &rmmpb.Hello{
+			ProtocolVersion: 1, AgentVersion: "0.0.0-test", Os: "linux", Arch: "amd64", Hostname: "job-box",
+		}}})
+		if wsRead(t, ctx, ws).GetHelloAck() == nil {
+			t.Fatal("expected hello ack")
+		}
+		return ws
+	}
+	ws := connectAndAuth()
+	defer ws.Close(websocket.StatusNormalClosure, "")
+
+	// --- Online dispatch: device is connected, command arrives immediately ---
+	job := alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"device_id": deviceID, "timeout_s": 30, "parameters": obj{}}, 201)
+	jobID := job["job_id"].(string)
+
+	// Read the CommandRequest from the WS.
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	var cmdReq *rmmpb.CommandRequest
+	for cmdReq == nil {
+		env, err := readEnvelope(rctx, ws)
+		if err != nil {
+			t.Fatalf("no CommandRequest received: %v", err)
+		}
+		cmdReq = env.GetCommandRequest()
+	}
+	cancel()
+	if cmdReq.CommandId == "" {
+		t.Fatal("CommandRequest has no command_id")
+	}
+	if cmdReq.Kind != rmmpb.CommandKind_COMMAND_KIND_SCRIPT {
+		t.Fatalf("expected SCRIPT kind, got %v", cmdReq.Kind)
+	}
+
+	// Send back a successful CommandResult.
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{
+		MessageId: "result-1",
+		Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
+			CommandId: cmdReq.CommandId,
+			Status:    rmmpb.CommandStatus_COMMAND_STATUS_SUCCEEDED,
+			ExitCode:  0,
+			Output:    []byte("hello v2\n"),
+		}},
+	})
+
+	// Poll until the job is succeeded (gateway processes the result async).
+	deadline := time.Now().Add(5 * time.Second)
+	var jobStatus string
+	for time.Now().Before(deadline) {
+		j := alpha.get(t, "/api/v1/jobs/"+jobID, 200)
+		jobStatus = j["status"].(string)
+		if jobStatus == "succeeded" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if jobStatus != "succeeded" {
+		t.Fatalf("job should be succeeded, got %q", jobStatus)
+	}
+
+	// Retrieve output.
+	out := alpha.get(t, "/api/v1/jobs/"+jobID+"/output", 200)
+	if out["output"] != "hello v2\n" {
+		t.Fatalf("unexpected output: %v", out["output"])
+	}
+
+	// Cross-tenant: beta cannot see the job.
+	if n := len(beta.get(t, "/api/v1/jobs", 200)["jobs"].([]any)); n != 0 {
+		t.Fatalf("beta must see 0 jobs, got %d", n)
+	}
+	beta.get(t, "/api/v1/jobs/"+jobID, 404)
+
+	// --- Offline queue: create job while device is disconnected ---
+	ws.Close(websocket.StatusNormalClosure, "")
+	time.Sleep(100 * time.Millisecond) // let the server detect disconnect
+
+	offlineJob := alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"device_id": deviceID, "timeout_s": 30, "parameters": obj{}}, 201)
+	offlineJobID := offlineJob["job_id"].(string)
+	j2 := alpha.get(t, "/api/v1/jobs/"+offlineJobID, 200)
+	if s := j2["status"].(string); s != "pending" {
+		t.Fatalf("offline job should be pending, got %q", s)
+	}
+
+	// Reconnect — the gateway should drain the pending job.
+	ws2 := connectAndAuth()
+	defer ws2.Close(websocket.StatusNormalClosure, "")
+
+	rctx2, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	var cmdReq2 *rmmpb.CommandRequest
+	for cmdReq2 == nil {
+		env, err := readEnvelope(rctx2, ws2)
+		if err != nil {
+			t.Fatalf("no CommandRequest on reconnect: %v", err)
+		}
+		cmdReq2 = env.GetCommandRequest()
+	}
+	cancel2()
+
+	// Send back the result.
+	wsWrite(t, ctx, ws2, &rmmpb.Envelope{
+		Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
+			CommandId: cmdReq2.CommandId,
+			Status:    rmmpb.CommandStatus_COMMAND_STATUS_FAILED,
+			ExitCode:  1,
+			Output:    []byte("error: something failed\n"),
+		}},
+	})
+
+	deadline2 := time.Now().Add(5 * time.Second)
+	var offlineStatus string
+	for time.Now().Before(deadline2) {
+		j := alpha.get(t, "/api/v1/jobs/"+offlineJobID, 200)
+		offlineStatus = j["status"].(string)
+		if offlineStatus == "failed" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if offlineStatus != "failed" {
+		t.Fatalf("offline job should be failed, got %q", offlineStatus)
+	}
+
+	// --- Archive script: archived scripts cannot be dispatched ---
+	alpha.req(t, "DELETE", "/api/v1/scripts/"+scriptID, nil, 200)
+	alpha.get(t, "/api/v1/scripts/"+scriptID, 404) // not in default list
+	archived := alpha.get(t, "/api/v1/scripts?archived=true", 200)["scripts"].([]any)
+	if len(archived) != 1 {
+		t.Fatalf("archived list should have 1 entry, got %d", len(archived))
+	}
+	alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"device_id": deviceID, "timeout_s": 30}, 404)
 }
 
 func readEnvelope(ctx context.Context, ws *websocket.Conn) (*rmmpb.Envelope, error) {

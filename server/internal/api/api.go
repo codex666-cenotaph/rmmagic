@@ -103,6 +103,17 @@ func (s *Server) Routes() []Route {
 		{Method: "GET", Pattern: "/api/v1/devices/{id}/stats", Perm: auth.PermDevicesRead, Handler: s.handleDeviceStats},
 		{Method: "POST", Pattern: "/api/v1/devices/{id}/decommission", Perm: auth.PermDevicesManage, Handler: s.handleDecommissionDevice},
 
+		{Method: "GET", Pattern: "/api/v1/scripts", Perm: auth.PermScriptsRead, Handler: s.handleListScripts},
+		{Method: "POST", Pattern: "/api/v1/scripts", Perm: auth.PermScriptsManage, Handler: s.handleCreateScript},
+		{Method: "GET", Pattern: "/api/v1/scripts/{id}", Perm: auth.PermScriptsRead, Handler: s.handleGetScript},
+		{Method: "PATCH", Pattern: "/api/v1/scripts/{id}", Perm: auth.PermScriptsManage, Handler: s.handleUpdateScript},
+		{Method: "DELETE", Pattern: "/api/v1/scripts/{id}", Perm: auth.PermScriptsManage, Handler: s.handleArchiveScript},
+		{Method: "POST", Pattern: "/api/v1/scripts/{id}/dispatch", Perm: auth.PermScriptsExecute, Handler: s.handleDispatchJob},
+
+		{Method: "GET", Pattern: "/api/v1/jobs", Perm: auth.PermScriptsRead, Handler: s.handleListJobs},
+		{Method: "GET", Pattern: "/api/v1/jobs/{id}", Perm: auth.PermScriptsRead, Handler: s.handleGetJob},
+		{Method: "GET", Pattern: "/api/v1/jobs/{id}/output", Perm: auth.PermScriptsRead, Handler: s.handleGetJobOutput},
+
 		// Agent-facing: no user session; each handler authenticates the
 		// device itself (enrollment token / Ed25519 request signature).
 		{Method: "POST", Pattern: "/agent/v1/enroll", Public: true, Handler: s.handleAgentEnroll},

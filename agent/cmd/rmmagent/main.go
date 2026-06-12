@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/conn"
+	agentexec "github.com/codex666-cenotaph/rmmagic/agent/internal/exec"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/identity"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
 )
@@ -69,7 +70,12 @@ func main() {
 			log.Error("device has been decommissioned; re-enroll to continue")
 			os.Exit(1)
 		}
-		agent, err := conn.NewAgent(id, log)
+		journal, err := agentexec.NewJournal(*stateDir)
+		if err != nil {
+			log.Error("cannot load command journal", "error", err)
+			os.Exit(1)
+		}
+		agent, err := conn.NewAgent(id, log, journal)
 		if err != nil {
 			log.Error("invalid identity", "error", err)
 			os.Exit(1)

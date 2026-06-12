@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS job_outputs;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS scripts;

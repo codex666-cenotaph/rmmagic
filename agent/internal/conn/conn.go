@@ -22,9 +22,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/collect"
+	agentexec "github.com/codex666-cenotaph/rmmagic/agent/internal/exec"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/identity"
 	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
 	rmmpb "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/rmm/v1"
@@ -90,18 +93,20 @@ func Enroll(ctx context.Context, serverURL, token, stateDir string) error {
 
 // Agent is the running connection manager.
 type Agent struct {
-	ID   *identity.Identity
-	Key  ed25519.PrivateKey
-	Log  *slog.Logger
-	HTTP *http.Client
+	ID      *identity.Identity
+	Key     ed25519.PrivateKey
+	Log     *slog.Logger
+	HTTP    *http.Client
+	Journal *agentexec.Journal
 }
 
-func NewAgent(id *identity.Identity, log *slog.Logger) (*Agent, error) {
+func NewAgent(id *identity.Identity, log *slog.Logger, journal *agentexec.Journal) (*Agent, error) {
 	key, err := id.PrivateKey()
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{ID: id, Key: key, Log: log, HTTP: &http.Client{Timeout: 30 * time.Second}}, nil
+	return &Agent{ID: id, Key: key, Log: log, Journal: journal,
+		HTTP: &http.Client{Timeout: 30 * time.Second}}, nil
 }
 
 // Run maintains the gateway connection and the stats loop until ctx is
@@ -221,17 +226,12 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		switch env.Payload.(type) {
+		switch p := env.Payload.(type) {
 		case *rmmpb.Envelope_Decommission:
 			a.Log.Warn("decommissioned by server")
 			return ErrDecommissioned
 		case *rmmpb.Envelope_CommandRequest:
-			// Command execution lands in M3; ack receipt so the server
-			// can observe liveness.
-			_ = write(ctx, ws, &rmmpb.Envelope{
-				InReplyTo: env.MessageId,
-				Payload:   &rmmpb.Envelope_Ack{Ack: &rmmpb.Ack{}},
-			})
+			go a.executeCommand(ctx, ws, p.CommandRequest)
 		}
 	}
 }
@@ -285,6 +285,68 @@ func (a *Agent) postStats(ctx context.Context, samples []collect.Sample) error {
 		return fmt.Errorf("stats rejected: %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// executeCommand runs a CommandRequest and sends back a CommandResult.
+// It is called in its own goroutine so the read loop keeps serving.
+func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmmpb.CommandRequest) {
+	if req == nil || req.CommandId == "" {
+		return
+	}
+	// Idempotency: skip if already completed.
+	if a.Journal != nil && a.Journal.Contains(req.CommandId) {
+		a.Log.Info("skipping already-executed command", "command_id", req.CommandId)
+		return
+	}
+	a.Log.Info("executing command", "command_id", req.CommandId, "kind", req.Kind)
+
+	var result agentexec.Result
+	pbStatus := rmmpb.CommandStatus_COMMAND_STATUS_FAILED
+
+	if req.Kind == rmmpb.CommandKind_COMMAND_KIND_SCRIPT {
+		spec, err := agentexec.ParseSpec(req.Spec)
+		if err != nil {
+			a.Log.Error("bad command spec", "command_id", req.CommandId, "error", err)
+			result = agentexec.Result{Output: []byte("bad spec: " + err.Error())}
+		} else {
+			result = agentexec.RunScript(ctx, spec, req.TimeoutS)
+		}
+	} else {
+		result = agentexec.Result{Output: []byte("unsupported command kind")}
+	}
+
+	switch {
+	case result.Err != nil && errors.Is(result.Err, context.DeadlineExceeded):
+		pbStatus = rmmpb.CommandStatus_COMMAND_STATUS_TIMEOUT
+	case result.Err != nil:
+		pbStatus = rmmpb.CommandStatus_COMMAND_STATUS_FAILED
+	case result.ExitCode == 0:
+		pbStatus = rmmpb.CommandStatus_COMMAND_STATUS_SUCCEEDED
+	default:
+		pbStatus = rmmpb.CommandStatus_COMMAND_STATUS_FAILED
+	}
+
+	// Record in journal before sending the result so a crash after
+	// recording but before sending results in a duplicate send (which the
+	// server handles idempotently), not a duplicate execution.
+	if a.Journal != nil {
+		if err := a.Journal.Record(req.CommandId); err != nil {
+			a.Log.Warn("journal write failed", "command_id", req.CommandId, "error", err)
+		}
+	}
+
+	_ = write(ctx, ws, &rmmpb.Envelope{
+		MessageId: uuid.NewString(),
+		Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
+			CommandId:  req.CommandId,
+			Status:     pbStatus,
+			ExitCode:   int32(result.ExitCode),
+			Output:     result.Output,
+			Truncated:  result.Truncated,
+			StartedAt:  timestamppb.New(result.StartedAt),
+			FinishedAt: timestamppb.New(result.FinishedAt),
+		}},
+	})
 }
 
 func read(ctx context.Context, ws *websocket.Conn) (*rmmpb.Envelope, error) {
