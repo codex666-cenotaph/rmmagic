@@ -13,3 +13,4 @@ rmmserver
 *.tsbuildinfo
 .run/
 deploy/rmmagic.env
+agent/packaging/.staging/
