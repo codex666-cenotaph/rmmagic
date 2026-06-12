@@ -40,15 +40,19 @@ ok()    { printf '\e[1;32m ok\e[0m %s\n' "$*"; }
 die()   { printf '\e[1;31mERROR:\e[0m %s\n' "$*" >&2; exit 1; }
 
 prompt() {
-  local var="$1" label="$2" default="${3:-}"
+  local var="$1" label="$2" default="${3:-}" secret="${4:-false}"
   local value=""
   if [[ -n "$default" ]]; then
     read -rp "$label [$default]: " value
     value="${value:-$default}"
-  else
+  elif [[ "$secret" == "true" ]]; then
     while [[ -z "$value" ]]; do
       read -rsp "$label: " value
       echo
+    done
+  else
+    while [[ -z "$value" ]]; do
+      read -rp "$label: " value
     done
   fi
   printf -v "$var" '%s' "$value"
@@ -133,10 +137,10 @@ if $FIRST_RUN; then
   echo ""
   info "Bootstrap first tenant"
   echo ""
-  prompt BOOTSTRAP_TENANT  "Organisation name" "My MSP"
-  prompt BOOTSTRAP_SLUG    "Slug (URL-safe, no spaces)" "my-msp"
-  prompt BOOTSTRAP_EMAIL   "Admin email"
-  prompt BOOTSTRAP_PASSWORD "Admin password (min 12 chars)"
+  prompt BOOTSTRAP_TENANT   "Organisation name" "My MSP"
+  prompt BOOTSTRAP_SLUG     "Slug (URL-safe, no spaces)" "my-msp"
+  prompt BOOTSTRAP_EMAIL    "Admin email" ""
+  prompt BOOTSTRAP_PASSWORD "Admin password (min 12 chars)" "" "true"
 
   docker compose -f "$COMPOSE_FILE" run --rm \
     -e RMM_DATABASE_URL="postgres://rmm:${POSTGRES_PASSWORD}@postgres:5432/rmm?sslmode=disable" \
