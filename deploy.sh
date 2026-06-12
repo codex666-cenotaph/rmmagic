@@ -147,11 +147,11 @@ done
 # ── build or pull ─────────────────────────────────────────────────────────────
 
 if $BUILD; then
-  info "Building images..."
-  docker compose -f "$COMPOSE_FILE" build --pull
+  info "Building images from source..."
+  docker compose -f "$COMPOSE_FILE" -f docker-compose.build.yml build --pull
 else
-  info "Pulling base images..."
-  docker compose -f "$COMPOSE_FILE" pull --ignore-buildable 2>/dev/null || true
+  info "Pulling pre-built images from registry..."
+  docker compose -f "$COMPOSE_FILE" pull
 fi
 
 # ── start services ────────────────────────────────────────────────────────────
