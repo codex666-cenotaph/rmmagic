@@ -57,6 +57,9 @@ func main() {
 			log.Error("enrollment failed", "error", err)
 			os.Exit(1)
 		}
+		if err := platform.HardenStateDir(*stateDir); err != nil {
+			log.Warn("state directory ACL hardening failed", "error", err)
+		}
 		log.Info("enrolled", "state_dir", *stateDir)
 
 	case "run":
