@@ -55,6 +55,16 @@ sudo ./rmmagent enroll --server http://localhost:8080 --token rmme_...
 sudo ./rmmagent run        # use --state-dir for non-root development
 ```
 
+For a real endpoint, `deploy/install-agent.sh` does this end to end —
+it builds/installs the binary, prompts for the server URL and token, and
+optionally installs a systemd unit so the agent runs at boot:
+
+```sh
+sudo deploy/install-agent.sh                       # guided, interactive
+sudo deploy/install-agent.sh \
+  --server https://rmm.example.com --token rmme_... --service   # unattended
+```
+
 The device appears on the Devices page within seconds (heartbeat) and
 charts fill in as stats arrive (60s interval). Decommissioning from the
 dashboard revokes the device identity and disconnects the agent.
