@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/auth"
@@ -22,11 +23,20 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	var deviceID *uuid.UUID
+	if v := r.URL.Query().Get("device_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid device_id")
+			return
+		}
+		deviceID = &id
+	}
 
 	var als []store.Alert
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
 		var err error
-		als, err = store.ListAlerts(ctx, tx, status, nil, limit)
+		als, err = store.ListAlerts(ctx, tx, status, deviceID, limit)
 		return err
 	})
 	if err != nil {

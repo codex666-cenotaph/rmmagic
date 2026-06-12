@@ -225,6 +225,9 @@ function PolicyForm({
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [scopeType, setScopeType] = useState<api.PolicyScopeType>("tenant");
+  const [scopeCustomerId, setScopeCustomerId] = useState("");
+  const [scopeSiteId, setScopeSiteId] = useState("");
+  const [scopeDeviceId, setScopeDeviceId] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [cpuEnabled, setCpuEnabled] = useState(false);
   const [cpuThreshold, setCpuThreshold] = useState("80");
@@ -237,6 +240,23 @@ function PolicyForm({
   const [channelIDs, setChannelIDs] = useState<string[]>([]);
   const [err, setErr] = useState("");
 
+  // Scope targets, loaded lazily as the scope type requires them.
+  const customers = useQuery({
+    queryKey: ["customers"],
+    queryFn: api.listCustomers,
+    enabled: scopeType === "customer" || scopeType === "site",
+  });
+  const sites = useQuery({
+    queryKey: ["sites", scopeCustomerId],
+    queryFn: () => api.listSites(scopeCustomerId),
+    enabled: scopeType === "site" && scopeCustomerId !== "",
+  });
+  const devices = useQuery({
+    queryKey: ["devices"],
+    queryFn: api.listDevices,
+    enabled: scopeType === "device",
+  });
+
   const mut = useMutation({
     mutationFn: (body: api.PolicyBody) => api.createPolicy(body),
     onSuccess: () => {
@@ -246,15 +266,40 @@ function PolicyForm({
     onError: (e) => setErr((e as Error).message),
   });
 
+  function scopeID(): string {
+    switch (scopeType) {
+      case "customer":
+        return scopeCustomerId;
+      case "site":
+        return scopeSiteId;
+      case "device":
+        return scopeDeviceId;
+      default:
+        return "";
+    }
+  }
+
   function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setErr("");
+    const id = scopeID();
+    if (scopeType !== "tenant" && !id) {
+      setErr(`Select a ${scopeType} for this policy`);
+      return;
+    }
     const rules: api.PolicyRules = {};
     if (cpuEnabled) rules.cpu_pct = { threshold: Number(cpuThreshold) };
     if (memEnabled) rules.mem_pct = { threshold: Number(memThreshold) };
     if (diskEnabled) rules.disk_pct = { threshold: Number(diskThreshold) };
     if (offlineEnabled) rules.offline = { after_s: Number(offlineAfterS) };
-    mut.mutate({ name, scope_type: scopeType, enabled, rules, channel_ids: channelIDs });
+    mut.mutate({
+      name,
+      scope_type: scopeType,
+      scope_id: scopeType === "tenant" ? undefined : id,
+      enabled,
+      rules,
+      channel_ids: channelIDs,
+    });
   }
 
   return (
@@ -268,7 +313,12 @@ function PolicyForm({
         Scope
         <select
           value={scopeType}
-          onChange={(e) => setScopeType(e.target.value as api.PolicyScopeType)}
+          onChange={(e) => {
+            setScopeType(e.target.value as api.PolicyScopeType);
+            setScopeCustomerId("");
+            setScopeSiteId("");
+            setScopeDeviceId("");
+          }}
         >
           <option value="tenant">Tenant (all devices)</option>
           <option value="customer">Customer</option>
@@ -276,6 +326,66 @@ function PolicyForm({
           <option value="device">Device</option>
         </select>
       </label>
+
+      {(scopeType === "customer" || scopeType === "site") && (
+        <label>
+          Customer
+          <select
+            value={scopeCustomerId}
+            onChange={(e) => {
+              setScopeCustomerId(e.target.value);
+              setScopeSiteId("");
+            }}
+            required
+          >
+            <option value="">Select…</option>
+            {(customers.data?.customers ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {scopeType === "site" && (
+        <label>
+          Site
+          <select
+            value={scopeSiteId}
+            onChange={(e) => setScopeSiteId(e.target.value)}
+            disabled={!scopeCustomerId}
+            required
+          >
+            <option value="">
+              {scopeCustomerId ? "Select…" : "Pick a customer first"}
+            </option>
+            {(sites.data?.sites ?? []).map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {scopeType === "device" && (
+        <label>
+          Device
+          <select
+            value={scopeDeviceId}
+            onChange={(e) => setScopeDeviceId(e.target.value)}
+            required
+          >
+            <option value="">Select…</option>
+            {(devices.data?.devices ?? []).map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.hostname}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <label>
         <input
           type="checkbox"
@@ -438,6 +548,10 @@ function ChannelForm({
         setErr("URL required");
         return;
       }
+      if (secret.length < 16) {
+        setErr("Webhook deliveries are HMAC-signed; the secret must be at least 16 characters");
+        return;
+      }
       config = { url: webhookURL };
     }
     mut.mutate({ name, type, config, secret: secret || undefined });
@@ -481,11 +595,13 @@ function ChannelForm({
             />
           </label>
           <label>
-            Signing secret (optional)
+            Signing secret (min 16 chars; deliveries are HMAC-signed)
             <input
               type="password"
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
+              minLength={16}
+              required
             />
           </label>
         </>

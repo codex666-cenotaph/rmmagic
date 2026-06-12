@@ -24,6 +24,9 @@ import (
 
 const (
 	maxStatsBatch = 120 // samples per request
+	// Stats uploads include the full service-state snapshot, so the
+	// control-plane default (64 KiB) is too small.
+	maxStatsBytes = 256 << 10
 	// Inventory uploads carry the full package list; well above stats
 	// payloads but still bounded.
 	maxInventoryBytes = 2 << 20
@@ -137,7 +140,7 @@ func (s *Server) authDeviceRequest(r *http.Request, body []byte) (deviceID, tena
 }
 
 func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStatsBytes))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "body too large")
 		return

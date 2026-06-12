@@ -37,7 +37,7 @@ export function DeviceDetailPage() {
   });
   const deviceAlerts = useQuery({
     queryKey: ["alerts", "device", id],
-    queryFn: () => api.listAlerts({ limit: 50 }),
+    queryFn: () => api.listAlerts({ device_id: id, limit: 100 }),
     enabled: tab === "alerts",
   });
 
@@ -185,7 +185,6 @@ export function DeviceDetailPage() {
 
       {tab === "inventory" && (
         <InventoryTab
-          deviceId={id}
           canManage={canManage}
           data={inventory.data ?? null}
           isLoading={inventory.isLoading}
@@ -197,10 +196,7 @@ export function DeviceDetailPage() {
 
       {tab === "alerts" && (
         <AlertsTab
-          deviceId={id}
-          alerts={(deviceAlerts.data?.alerts ?? []).filter(
-            (a) => a.device_id === id,
-          )}
+          alerts={deviceAlerts.data?.alerts ?? []}
           isLoading={deviceAlerts.isLoading}
           error={deviceAlerts.error}
         />
@@ -217,7 +213,6 @@ function InventoryTab({
   onRefresh,
   refreshing,
 }: {
-  deviceId: string;
   canManage: boolean;
   data: api.Inventory | null;
   isLoading: boolean;
@@ -448,7 +443,6 @@ function AlertsTab({
   isLoading,
   error,
 }: {
-  deviceId: string;
   alerts: api.Alert[];
   isLoading: boolean;
   error: unknown;

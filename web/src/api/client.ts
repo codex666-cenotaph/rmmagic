@@ -617,9 +617,14 @@ export interface Alert {
   acked_at: string | null;
 }
 
-export const listAlerts = (params?: { status?: string; limit?: number }) => {
+export const listAlerts = (params?: {
+  status?: string;
+  device_id?: string;
+  limit?: number;
+}) => {
   const q = new URLSearchParams();
   if (params?.status) q.set("status", params.status);
+  if (params?.device_id) q.set("device_id", params.device_id);
   if (params?.limit) q.set("limit", String(params.limit));
   const qs = q.toString();
   return request<{ alerts: Alert[] }>("GET", `/alerts${qs ? `?${qs}` : ""}`);

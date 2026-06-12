@@ -69,11 +69,17 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "webhook config requires url")
 			return
 		}
+		// Deliveries are always HMAC-signed; a webhook channel without a
+		// secret could never deliver.
+		if len(req.Secret) < 16 || len(req.Secret) > 200 {
+			writeError(w, http.StatusBadRequest, "webhook channels require a signing secret (16-200 chars)")
+			return
+		}
 	}
 
 	id := uuid.New()
 	var secretEnc []byte
-	if req.Type == "webhook" && req.Secret != "" && s.Box != nil {
+	if req.Type == "webhook" {
 		var err error
 		secretEnc, err = s.Box.Seal([]byte(req.Secret), id[:])
 		if err != nil {
@@ -83,7 +89,11 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
-		return store.CreateChannel(ctx, tx, p.TenantID, id, req.Name, req.Type, req.Config, secretEnc, &p.UserID)
+		if err := store.CreateChannel(ctx, tx, p.TenantID, id, req.Name, req.Type, req.Config, secretEnc, &p.UserID); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "channel.create", "channel", id,
+			map[string]any{"name": req.Name, "type": req.Type})
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -100,7 +110,10 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
-		return store.DeleteChannel(ctx, tx, id)
+		if err := store.DeleteChannel(ctx, tx, id); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "channel.delete", "channel", id, map[string]any{})
 	})
 	if err != nil {
 		writeStoreError(w, err)

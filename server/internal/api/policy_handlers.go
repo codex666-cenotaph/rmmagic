@@ -95,7 +95,11 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
 		var err error
 		id, err = store.CreatePolicy(ctx, tx, p.TenantID, pol, &p.UserID)
-		return err
+		if err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "policy.create", "policy", id,
+			map[string]any{"name": req.Name, "scope_type": req.ScopeType})
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -152,7 +156,11 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		Enabled: req.Enabled, Rules: req.Rules, ChannelIDs: req.ChannelIDs,
 	}
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
-		return store.UpdatePolicy(ctx, tx, pol)
+		if err := store.UpdatePolicy(ctx, tx, pol); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "policy.update", "policy", id,
+			map[string]any{"name": req.Name, "enabled": req.Enabled})
 	})
 	if err != nil {
 		writeStoreError(w, err)
@@ -169,7 +177,10 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
-		return store.DeletePolicy(ctx, tx, id)
+		if err := store.DeletePolicy(ctx, tx, id); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "policy.delete", "policy", id, map[string]any{})
 	})
 	if err != nil {
 		writeStoreError(w, err)

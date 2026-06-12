@@ -239,7 +239,9 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 }
 
 // statsLoop samples and uploads stats independent of the WS connection
-// (HTTPS ingest tolerates gateway hiccups).
+// (HTTPS ingest tolerates gateway hiccups). Each upload carries the
+// current service states so service-down policies always evaluate
+// fresh data (the worker ignores snapshots older than a few minutes).
 func (a *Agent) statsLoop(ctx context.Context) {
 	t := time.NewTicker(statsInterval)
 	defer t.Stop()
@@ -253,15 +255,20 @@ func (a *Agent) statsLoop(ctx context.Context) {
 				a.Log.Error("collect failed", "error", err)
 				continue
 			}
-			if err := a.postStats(ctx, []collect.Sample{s}); err != nil {
+			svcs, _ := collect.CollectServices(ctx)
+			if err := a.postStats(ctx, []collect.Sample{s}, svcs); err != nil {
 				a.Log.Warn("stats upload failed", "error", err)
 			}
 		}
 	}
 }
 
-func (a *Agent) postStats(ctx context.Context, samples []collect.Sample) error {
-	body, err := json.Marshal(map[string]any{"samples": samples})
+func (a *Agent) postStats(ctx context.Context, samples []collect.Sample, services []collect.Service) error {
+	payload := map[string]any{"samples": samples}
+	if len(services) > 0 {
+		payload["services"] = services
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
@@ -426,9 +433,9 @@ func (a *Agent) uploadInventory(ctx context.Context) error {
 
 	body, err := json.Marshal(map[string]any{
 		"collected_at": time.Now().UTC(),
-		"hw":          hw,
-		"packages":    pkgs,
-		"services":    svcs,
+		"hw":           hw,
+		"packages":     pkgs,
+		"services":     svcs,
 	})
 	if err != nil {
 		return err

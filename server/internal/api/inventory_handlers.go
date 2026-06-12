@@ -3,7 +3,6 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -153,6 +152,3 @@ func scopeRank(scopeType string) int {
 	}
 	return -1
 }
-
-// unused placeholder to keep time import if trimmed later
-var _ = time.Time{}
