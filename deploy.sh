@@ -79,11 +79,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo ""
 
   {
-    echo "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}"
-    echo "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}"
-    echo "RMM_MASTER_KEY=${GENERATED_KEY}"
-    echo "RMM_COOKIE_SECURE=${RMM_COOKIE_SECURE}"
-    echo "HTTP_PORT=${HTTP_PORT}"
+    printf "POSTGRES_PASSWORD='%s'\n"    "${POSTGRES_PASSWORD}"
+    printf "MINIO_ROOT_PASSWORD='%s'\n"  "${MINIO_ROOT_PASSWORD}"
+    printf "RMM_MASTER_KEY='%s'\n"       "${GENERATED_KEY}"
+    printf "RMM_COOKIE_SECURE='%s'\n"    "${RMM_COOKIE_SECURE}"
+    printf "HTTP_PORT='%s'\n"            "${HTTP_PORT}"
   } > "$ENV_FILE"
   ok ".env created"
   BUILD=true
