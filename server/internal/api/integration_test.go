@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,16 +15,22 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
+	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
+	rmmpb "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/rmm/v1"
 )
 
 // Integration suite: runs the full API against real Postgres, with the
@@ -69,7 +77,14 @@ func TestAPIIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := NewServer(appStore, box, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
-	ts := httptest.NewServer(srv.Handler())
+	gw := gateway.New(appStore, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv.Gateway = gw
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/", srv.Handler())
+	mux.Handle("/agent/v1/enroll", srv.Handler())
+	mux.Handle("/agent/v1/stats", srv.Handler())
+	mux.HandleFunc("GET /agent/v1/connect", gw.HandleConnect)
+	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
 	alpha := newClient(t, ts.URL)
@@ -195,6 +210,195 @@ func TestAPIIntegration(t *testing.T) {
 	// --- bad login is rejected and unknown email does not differ in status ---
 	newClient(t, ts.URL).post(t, "/api/v1/auth/login", obj{"email": "owner@alpha.test", "password": "wrong-password-x"}, 401)
 	newClient(t, ts.URL).post(t, "/api/v1/auth/login", obj{"email": "ghost@nowhere.test", "password": "wrong-password-x"}, 401)
+
+	testDeviceFlow(t, ts.URL, alpha, beta, siteID)
+}
+
+// testDeviceFlow exercises M2: enrollment, gateway auth, heartbeat,
+// stats ingest, decommission, and the cross-tenant device probes.
+func testDeviceFlow(t *testing.T, baseURL string, alpha, beta *client, siteID string) {
+	ctx := context.Background()
+
+	// Enrollment token (1 use, by design below).
+	tok := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 201)
+	enrollToken := tok["token"].(string)
+	if !strings.HasPrefix(enrollToken, "rmme_") {
+		t.Fatalf("unexpected token format: %s", enrollToken)
+	}
+
+	// Enroll a fake agent.
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anon := newClient(t, baseURL)
+	enrolled := anon.post(t, "/agent/v1/enroll", obj{
+		"token": enrollToken, "hostname": "test-box", "os": "linux", "arch": "amd64",
+		"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+	}, 201)
+	deviceID := enrolled["device_id"].(string)
+
+	// Single-use token: second enrollment must fail.
+	anon.post(t, "/agent/v1/enroll", obj{
+		"token": enrollToken, "hostname": "test-box-2", "os": "linux", "arch": "amd64",
+		"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+	}, 401)
+
+	// Connect to the gateway with challenge-response auth.
+	wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/agent/v1/connect"
+	ws, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close(websocket.StatusNormalClosure, "")
+
+	env := wsRead(t, ctx, ws)
+	nonce := env.GetAuthChallenge().GetNonce()
+	if len(nonce) != 32 {
+		t.Fatalf("expected 32-byte nonce, got %d", len(nonce))
+	}
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_AuthResponse{
+		AuthResponse: &rmmpb.AuthResponse{DeviceId: deviceID, Signature: devicesig.SignChallenge(priv, nonce)},
+	}})
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_Hello{Hello: &rmmpb.Hello{
+		ProtocolVersion: 1, AgentVersion: "0.0.0-test", Os: "linux", Arch: "amd64", Hostname: "test-box",
+	}}})
+	if wsRead(t, ctx, ws).GetHelloAck() == nil {
+		t.Fatal("expected hello ack")
+	}
+
+	// Device is online and visible to alpha.
+	devs := alpha.get(t, "/api/v1/devices", 200)["devices"].([]any)
+	if len(devs) != 1 {
+		t.Fatalf("alpha should see 1 device, got %d", len(devs))
+	}
+	dev := devs[0].(map[string]any)
+	if dev["online"] != true || dev["hostname"] != "test-box" {
+		t.Fatalf("device not online after hello: %v", dev)
+	}
+
+	// Cross-tenant: beta sees nothing and cannot act on the device.
+	if n := len(beta.get(t, "/api/v1/devices", 200)["devices"].([]any)); n != 0 {
+		t.Fatalf("beta must see 0 devices, got %d", n)
+	}
+	beta.get(t, "/api/v1/devices/"+deviceID, 404)
+	beta.post(t, "/api/v1/devices/"+deviceID+"/decommission", nil, 404)
+	beta.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 404)
+
+	// Signed stats ingest.
+	statsBody, _ := json.Marshal(obj{"samples": []obj{{
+		"ts": time.Now().UTC().Format(time.RFC3339), "cpu_pct": 12.5,
+		"mem_used": 1024, "mem_total": 2048,
+		"disks": []obj{{"mount": "/", "used": 1, "total": 10}},
+		"net":   obj{"rx_bytes": 1, "tx_bytes": 2},
+	}}})
+	unix := time.Now().Unix()
+	doSigned := func(sig []byte, wantStatus int) {
+		req, _ := http.NewRequest("POST", baseURL+"/agent/v1/stats", bytes.NewReader(statsBody))
+		req.Header.Set("X-Device-Id", deviceID)
+		req.Header.Set("X-Timestamp", strconv.FormatInt(unix, 10))
+		req.Header.Set("X-Signature", base64.StdEncoding.EncodeToString(sig))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("stats post: got %d want %d", resp.StatusCode, wantStatus)
+		}
+	}
+	doSigned(devicesig.SignRequest(priv, unix, statsBody), 202)
+	// Wrong key must be rejected.
+	_, otherKey, _ := ed25519.GenerateKey(nil)
+	doSigned(devicesig.SignRequest(otherKey, unix, statsBody), 401)
+
+	samples := alpha.get(t, "/api/v1/devices/"+deviceID+"/stats", 200)["samples"].([]any)
+	if len(samples) != 1 {
+		t.Fatalf("expected 1 stats sample, got %d", len(samples))
+	}
+
+	// Decommission: live connection receives Decommission and re-auth fails.
+	alpha.post(t, "/api/v1/devices/"+deviceID+"/decommission", nil, 200)
+	deadline := time.Now().Add(5 * time.Second)
+	gotDecommission := false
+	for time.Now().Before(deadline) {
+		rctx, cancel := context.WithTimeout(ctx, time.Second)
+		env, err := readEnvelope(rctx, ws)
+		cancel()
+		if err != nil {
+			break // connection closed by server, acceptable terminal state
+		}
+		if env.GetDecommission() != nil {
+			gotDecommission = true
+			break
+		}
+	}
+	if !gotDecommission {
+		t.Error("agent never received Decommission frame")
+	}
+
+	ws2, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws2.Close(websocket.StatusNormalClosure, "")
+	env = wsRead(t, ctx, ws2)
+	wsWrite(t, ctx, ws2, &rmmpb.Envelope{Payload: &rmmpb.Envelope_AuthResponse{
+		AuthResponse: &rmmpb.AuthResponse{
+			DeviceId:  deviceID,
+			Signature: devicesig.SignChallenge(priv, env.GetAuthChallenge().GetNonce()),
+		},
+	}})
+	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	_, err = readEnvelope(rctx, ws2)
+	cancel()
+	if err == nil {
+		t.Fatal("decommissioned device must not authenticate")
+	}
+	// Stats from a revoked device are rejected too.
+	doSigned(devicesig.SignRequest(priv, unix, statsBody), 401)
+
+	// Token revocation.
+	tok2 := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID, "max_uses": 5}, 201)
+	alpha.req(t, "DELETE", "/api/v1/enrollment-tokens/"+tok2["id"].(string), nil, 204)
+	anon.post(t, "/agent/v1/enroll", obj{
+		"token": tok2["token"].(string), "hostname": "x", "os": "linux", "arch": "amd64",
+		"agent_version": "t", "pubkey": base64.StdEncoding.EncodeToString(pub),
+	}, 401)
+}
+
+func readEnvelope(ctx context.Context, ws *websocket.Conn) (*rmmpb.Envelope, error) {
+	_, b, err := ws.Read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	env := &rmmpb.Envelope{}
+	if err := proto.Unmarshal(b, env); err != nil {
+		return nil, err
+	}
+	return env, nil
+}
+
+func wsRead(t *testing.T, ctx context.Context, ws *websocket.Conn) *rmmpb.Envelope {
+	t.Helper()
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	env, err := readEnvelope(rctx, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return env
+}
+
+func wsWrite(t *testing.T, ctx context.Context, ws *websocket.Conn, env *rmmpb.Envelope) {
+	t.Helper()
+	b, err := proto.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Write(ctx, websocket.MessageBinary, b); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func applyMigrations(t *testing.T, ctx context.Context, priv *store.Store) {

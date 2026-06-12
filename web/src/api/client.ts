@@ -114,6 +114,50 @@ export interface ApiToken {
   created_at: string;
 }
 
+export type DeviceStatus = "active" | "decommissioned";
+
+export interface Device {
+  id: string;
+  site_id: string;
+  site_name: string;
+  customer_id: string;
+  customer_name: string;
+  hostname: string;
+  os: string;
+  arch: string;
+  agent_version: string;
+  status: DeviceStatus;
+  online: boolean;
+  last_seen_at: string | null;
+  created_at: string;
+}
+
+export interface DiskSample {
+  mount: string;
+  used: number;
+  total: number;
+}
+
+export interface StatsSample {
+  ts: string;
+  cpu_pct: number;
+  mem_used: number;
+  mem_total: number;
+  disks: DiskSample[];
+  net: { rx_bytes: number; tx_bytes: number };
+}
+
+export interface EnrollmentToken {
+  id: string;
+  site_id: string;
+  site_name: string;
+  expires_at: string | null;
+  max_uses: number;
+  use_count: number;
+  revoked_at: string | null;
+  created_at: string;
+}
+
 export interface AuditEntry {
   id: string;
   actor_type: string;
@@ -209,6 +253,41 @@ export const createToken = (body: {
 
 export const revokeToken = (id: string) =>
   request<void>("DELETE", `/api-tokens/${id}`);
+
+// ---- Devices ----
+
+export const listDevices = () =>
+  request<{ devices: Device[] }>("GET", "/devices");
+
+export const getDevice = (id: string) => request<Device>("GET", `/devices/${id}`);
+
+export const getDeviceStats = (id: string, since?: string, until?: string) => {
+  const q = new URLSearchParams();
+  if (since) q.set("since", since);
+  if (until) q.set("until", until);
+  const qs = q.toString();
+  return request<{ samples: StatsSample[] }>(
+    "GET",
+    `/devices/${id}/stats${qs ? `?${qs}` : ""}`,
+  );
+};
+
+export const decommissionDevice = (id: string) =>
+  request<Record<string, never>>("POST", `/devices/${id}/decommission`);
+
+// ---- Enrollment tokens ----
+
+export const listEnrollmentTokens = () =>
+  request<{ tokens: EnrollmentToken[] }>("GET", "/enrollment-tokens");
+
+export const createEnrollmentToken = (body: {
+  site_id: string;
+  expires_at?: string;
+  max_uses?: number;
+}) => request<{ id: string; token: string }>("POST", "/enrollment-tokens", body);
+
+export const revokeEnrollmentToken = (id: string) =>
+  request<void>("DELETE", `/enrollment-tokens/${id}`);
 
 // ---- Audit ----
 

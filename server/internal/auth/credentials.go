@@ -55,6 +55,17 @@ func NewAPIToken() (string, []byte, error) {
 
 func IsAPIToken(token string) bool { return strings.HasPrefix(token, apiTokenPrefix) }
 
+// NewEnrollmentToken returns (plaintext "rmme_..." token, sha256 hash).
+// Distinct prefix from API tokens so leaked values are identifiable.
+func NewEnrollmentToken() (string, []byte, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", nil, err
+	}
+	token := "rmme_" + base64.RawURLEncoding.EncodeToString(raw)
+	return token, HashToken(token), nil
+}
+
 // HashToken is how all bearer secrets (sessions, API tokens, recovery
 // codes via HashRecoveryCode) are stored: only the digest hits the DB.
 func HashToken(token string) []byte {

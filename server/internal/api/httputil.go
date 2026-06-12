@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -28,6 +29,20 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// jsonUnmarshalStrict mirrors decodeJSON for pre-read bodies (used when
+// the raw bytes are needed for signature verification).
+func jsonUnmarshalStrict(b []byte, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if dec.More() {
+		return errors.New("trailing data")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

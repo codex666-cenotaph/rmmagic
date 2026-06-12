@@ -10,6 +10,9 @@ import { ApiError } from "./api/client";
 import { RequireAuth } from "./auth";
 import { AppShell } from "./AppShell";
 import { LoginPage } from "./pages/LoginPage";
+import { DevicesPage } from "./pages/DevicesPage";
+import { DeviceDetailPage } from "./pages/DeviceDetailPage";
+import { EnrollPage } from "./pages/EnrollPage";
 import { CustomersPage } from "./pages/CustomersPage";
 import { UsersPage } from "./pages/UsersPage";
 import { TokensPage } from "./pages/TokensPage";
@@ -46,13 +49,16 @@ createRoot(document.getElementById("root")!).render(
               </RequireAuth>
             }
           >
+            <Route path="/devices" element={<DevicesPage />} />
+            <Route path="/devices/:id" element={<DeviceDetailPage />} />
+            <Route path="/enroll" element={<EnrollPage />} />
             <Route path="/customers" element={<CustomersPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/tokens" element={<TokensPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
-          <Route path="*" element={<Navigate to="/customers" replace />} />
+          <Route path="*" element={<Navigate to="/devices" replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

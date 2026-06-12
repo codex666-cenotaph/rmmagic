@@ -6,9 +6,11 @@ require github.com/codex666-cenotaph/rmmagic/shared v0.0.0
 
 require (
 	github.com/alexedwards/argon2id v1.0.0
+	github.com/coder/websocket v1.8.14
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/pquerna/otp v1.5.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (

@@ -49,3 +49,42 @@ export function fmtTime(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
 }
+
+export function fmtRelative(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const diffSec = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (diffSec < 5) return "just now";
+  if (diffSec < 60) return `${diffSec}s ago`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+export function fmtBytes(n: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${i === 0 ? Math.round(v) : v >= 10 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+
+export function DeviceStatusBadge({
+  status,
+  online,
+}: {
+  status: "active" | "decommissioned";
+  online: boolean;
+}) {
+  if (status === "decommissioned")
+    return <span className="badge off">decommissioned</span>;
+  return (
+    <span className={`badge ${online ? "on" : ""}`}>
+      {online ? "online" : "offline"}
+    </span>
+  );
+}

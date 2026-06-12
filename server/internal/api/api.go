@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/auth"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
@@ -31,6 +32,9 @@ type Server struct {
 	CookieSecure bool
 	SessionTTL   time.Duration
 	TOTPIssuer   string
+	// Gateway, when set, is notified to kick live agent connections on
+	// decommission.
+	Gateway *gateway.Gateway
 
 	loginLimiter *rateLimiter
 }
@@ -89,6 +93,20 @@ func (s *Server) Routes() []Route {
 		{Method: "DELETE", Pattern: "/api/v1/api-tokens/{id}", Perm: auth.PermTokensManage, Handler: s.handleRevokeAPIToken},
 
 		{Method: "GET", Pattern: "/api/v1/audit", Perm: auth.PermAuditRead, Handler: s.handleListAudit},
+
+		{Method: "GET", Pattern: "/api/v1/enrollment-tokens", Perm: auth.PermDevicesEnroll, Handler: s.handleListEnrollmentTokens},
+		{Method: "POST", Pattern: "/api/v1/enrollment-tokens", Perm: auth.PermDevicesEnroll, Handler: s.handleCreateEnrollmentToken},
+		{Method: "DELETE", Pattern: "/api/v1/enrollment-tokens/{id}", Perm: auth.PermDevicesEnroll, Handler: s.handleRevokeEnrollmentToken},
+
+		{Method: "GET", Pattern: "/api/v1/devices", Perm: auth.PermDevicesRead, Handler: s.handleListDevices},
+		{Method: "GET", Pattern: "/api/v1/devices/{id}", Perm: auth.PermDevicesRead, Handler: s.handleGetDevice},
+		{Method: "GET", Pattern: "/api/v1/devices/{id}/stats", Perm: auth.PermDevicesRead, Handler: s.handleDeviceStats},
+		{Method: "POST", Pattern: "/api/v1/devices/{id}/decommission", Perm: auth.PermDevicesManage, Handler: s.handleDecommissionDevice},
+
+		// Agent-facing: no user session; each handler authenticates the
+		// device itself (enrollment token / Ed25519 request signature).
+		{Method: "POST", Pattern: "/agent/v1/enroll", Public: true, Handler: s.handleAgentEnroll},
+		{Method: "POST", Pattern: "/agent/v1/stats", Public: true, Handler: s.handleAgentStats},
 	}
 }
 

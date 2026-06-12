@@ -46,6 +46,19 @@ RMM_COOKIE_SECURE=false \
 cd web && npm install && npm run dev   # http://localhost:5173, proxies /api
 ```
 
+Enroll a Linux endpoint: create an enrollment token in the dashboard
+(Enrollment page), then on the endpoint:
+
+```sh
+go -C agent build -o rmmagent ./cmd/rmmagent
+sudo ./rmmagent enroll --server http://localhost:8080 --token rmme_...
+sudo ./rmmagent run        # use --state-dir for non-root development
+```
+
+The device appears on the Devices page within seconds (heartbeat) and
+charts fill in as stats arrive (60s interval). Decommissioning from the
+dashboard revokes the device identity and disconnects the agent.
+
 Integration tests (live RLS tenant-isolation probes, full API flows):
 
 ```sh

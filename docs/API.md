@@ -52,6 +52,26 @@ After login with `mfa_required: true`, only `/auth/mfa/verify` and
 
 Requested permissions must be a subset of the caller's own.
 
+## Devices
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| GET /devices | devices.read | `{devices: [{id, site_id, site_name, customer_id, customer_name, hostname, os, arch, agent_version, status: "active"\|"decommissioned", online: bool, last_seen_at, created_at}]}` (scope-filtered) |
+| GET /devices/{id} | devices.read | one device object (shape above) |
+| GET /devices/{id}/stats?since=RFC3339&until=RFC3339 | devices.read | `{samples: [{ts, cpu_pct, mem_used, mem_total, disks: [{mount, used, total}], net: {rx_bytes, tx_bytes}}]}` ascending by ts; default window = last hour |
+| POST /devices/{id}/decommission | devices.manage | 200 `{}` — revokes the device identity and disconnects a live agent |
+
+## Enrollment tokens
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| GET /enrollment-tokens | devices.enroll | `{tokens: [{id, site_id, site_name, expires_at, max_uses, use_count, revoked_at, created_at}]}` |
+| POST /enrollment-tokens | devices.enroll | `{site_id, expires_at?, max_uses?}` → 201 `{id, token}` — plaintext `rmme_...` shown once. Defaults: 24h expiry, max_uses 1. |
+| DELETE /enrollment-tokens/{id} | devices.enroll | 204 (revokes) |
+
+Install command to display with a new token:
+`rmmagent enroll --server https://<host> --token <token> && rmmagent run`
+
 ## Audit log
 
 | Method/Path | Permission | Response |

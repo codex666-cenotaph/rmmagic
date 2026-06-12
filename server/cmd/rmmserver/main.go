@@ -27,6 +27,7 @@ import (
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/api"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
@@ -124,18 +125,28 @@ func runServe(log *slog.Logger) {
 			version.Version, version.Commit, version.ProtocolVersion)
 	})
 
-	if enabled["api"] {
-		box, err := secrets.NewBox(os.Getenv("RMM_MASTER_KEY"))
-		if err != nil {
-			log.Error("RMM_MASTER_KEY invalid", "error", err)
-			os.Exit(2)
-		}
+	if enabled["api"] || enabled["gateway"] {
 		st := openStore(ctx, log, envOr("RMM_APP_ROLE", "rmm_app"))
 		defer st.Close()
 
-		cookieSecure := envOr("RMM_COOKIE_SECURE", "true") != "false"
-		srv := api.NewServer(st, box, log, cookieSecure)
-		mux.Handle("/api/v1/", srv.Handler())
+		var gw *gateway.Gateway
+		if enabled["gateway"] {
+			gw = gateway.New(st, log)
+			mux.HandleFunc("GET /agent/v1/connect", gw.HandleConnect)
+		}
+		if enabled["api"] {
+			box, err := secrets.NewBox(os.Getenv("RMM_MASTER_KEY"))
+			if err != nil {
+				log.Error("RMM_MASTER_KEY invalid", "error", err)
+				os.Exit(2)
+			}
+			cookieSecure := envOr("RMM_COOKIE_SECURE", "true") != "false"
+			srv := api.NewServer(st, box, log, cookieSecure)
+			srv.Gateway = gw
+			mux.Handle("/api/v1/", srv.Handler())
+			mux.Handle("/agent/v1/enroll", srv.Handler())
+			mux.Handle("/agent/v1/stats", srv.Handler())
+		}
 	}
 
 	httpSrv := &http.Server{

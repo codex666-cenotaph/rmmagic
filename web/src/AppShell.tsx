@@ -4,6 +4,8 @@ import { logout } from "./api/client";
 import { useAuth } from "./auth";
 
 const NAV = [
+  { to: "/devices", label: "Devices" },
+  { to: "/enroll", label: "Enrollment" },
   { to: "/customers", label: "Customers" },
   { to: "/users", label: "Users" },
   { to: "/tokens", label: "API Tokens" },
@@ -12,7 +14,7 @@ const NAV = [
 ];
 
 export function AppShell() {
-  const { me } = useAuth();
+  const { me, can } = useAuth();
   const navigate = useNavigate();
   const qc = useQueryClient();
 
@@ -30,7 +32,9 @@ export function AppShell() {
       <aside className="sidebar">
         <div className="brand">rmmagic</div>
         <nav>
-          {NAV.map((item) => (
+          {NAV.filter(
+            (item) => item.to !== "/enroll" || can("devices.enroll"),
+          ).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

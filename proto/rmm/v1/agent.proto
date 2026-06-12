@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package rmm.v1;
 
-option go_package = "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/v1;rmmpb";
+option go_package = "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/rmm/v1;rmmpb";
 
 import "google/protobuf/timestamp.proto";
 
@@ -20,6 +20,10 @@ message Envelope {
   string in_reply_to = 2;
 
   oneof payload {
+    // connection authentication (first two frames of every connection)
+    AuthChallenge auth_challenge = 1001; // server -> agent
+    AuthResponse auth_response = 1002;   // agent -> server
+
     // agent -> server
     Hello hello = 10;
     Heartbeat heartbeat = 11;
@@ -38,6 +42,21 @@ message Envelope {
     UpdateOffer update_offer = 36;
     Decommission decommission = 37;
   }
+}
+
+// AuthChallenge is the first frame the server sends on a new
+// connection: a random nonce the agent must sign to prove possession of
+// the device private key. Connections are dropped if the response does
+// not arrive promptly.
+message AuthChallenge {
+  bytes nonce = 1; // 32 random bytes, single use
+}
+
+// AuthResponse proves device identity: signature is Ed25519 over the
+// challenge nonce using the key generated at enrollment.
+message AuthResponse {
+  string device_id = 1;
+  bytes signature = 2;
 }
 
 // Hello is the first frame an agent sends after the connection is
