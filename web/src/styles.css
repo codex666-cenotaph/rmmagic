@@ -723,6 +723,69 @@ pre.details {
 }
 
 /* ============================================================
+   Devices list (summary + table)
+   ============================================================ */
+
+.summary-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: stretch;
+  margin-bottom: 20px;
+}
+
+.summary-chart {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.summary-chart h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+.mini-stats {
+  flex: 1 1 360px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.mini-stats .stat-value {
+  font-size: 24px;
+}
+
+.table-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.table-card .data {
+  margin: 0;
+}
+
+.status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.device-link {
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.device-link:hover {
+  text-decoration: underline;
+}
+
+.agent-update {
+  margin-left: 8px;
+  font-size: 11px;
+  vertical-align: middle;
+}
+
+/* ============================================================
    Device detail page
    ============================================================ */
 

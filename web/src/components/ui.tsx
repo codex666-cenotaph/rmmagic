@@ -73,6 +73,19 @@ export function fmtBytes(n: number): string {
   return `${i === 0 ? Math.round(v) : v >= 10 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
 
+// Compare dotted version strings ("1.4.2"); returns >0 if a is newer.
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.\-+]/);
+  const pb = b.split(/[.\-+]/);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const x = parseInt(pa[i] ?? "0", 10) || 0;
+    const y = parseInt(pb[i] ?? "0", 10) || 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
 export function DeviceStatusBadge({
   status,
   online,

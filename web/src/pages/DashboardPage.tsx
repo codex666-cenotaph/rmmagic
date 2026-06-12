@@ -3,21 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import * as api from "../api/client";
 import { useAuth } from "../auth";
-import { fmtRelative } from "../components/ui";
+import { compareVersions, fmtRelative } from "../components/ui";
 import { BarRows, CHART, Donut, StatCard } from "../components/charts";
-
-// Compare dotted version strings ("1.4.2"); returns >0 if a is newer.
-function cmpVersion(a: string, b: string): number {
-  const pa = a.split(/[.\-+]/);
-  const pb = b.split(/[.\-+]/);
-  const n = Math.max(pa.length, pb.length);
-  for (let i = 0; i < n; i++) {
-    const x = parseInt(pa[i] ?? "0", 10) || 0;
-    const y = parseInt(pb[i] ?? "0", 10) || 0;
-    if (x !== y) return x - y;
-  }
-  return 0;
-}
 
 export function DashboardPage() {
   const { me, can } = useAuth();
@@ -70,7 +57,7 @@ export function DashboardPage() {
         ? counts
             .map((c) => c.label)
             .filter((v) => v !== "unknown")
-            .sort(cmpVersion)
+            .sort(compareVersions)
             .at(-1) ?? null
         : null;
     return { counts, newest };
@@ -80,7 +67,7 @@ export function DashboardPage() {
         (d) =>
           d.agent_version &&
           d.agent_version !== "unknown" &&
-          cmpVersion(d.agent_version, versions.newest!) < 0,
+          compareVersions(d.agent_version, versions.newest!) < 0,
       ).length
     : 0;
 
