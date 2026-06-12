@@ -17,8 +17,9 @@ func TestEveryRouteDeclaresAuthorization(t *testing.T) {
 		"POST /api/v1/auth/login": true,
 		// Device-authenticated in-handler: enrollment token validation /
 		// Ed25519 request signatures (see agent_handlers.go).
-		"POST /agent/v1/enroll": true,
-		"POST /agent/v1/stats":  true,
+		"POST /agent/v1/enroll":     true,
+		"POST /agent/v1/stats":      true,
+		"POST /agent/v1/inventory":  true,
 	}
 	seen := map[string]bool{}
 	known := map[auth.Permission]bool{PermSelf: true}

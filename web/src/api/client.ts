@@ -467,6 +467,198 @@ export const updateSchedule = (id: string, body: ScheduleBody) =>
 export const deleteSchedule = (id: string) =>
   request<void>("DELETE", `/schedules/${id}`);
 
+// ---- Inventory ----
+
+export interface HardwareDisk {
+  device: string;
+  mount: string;
+  fstype: string;
+  total: number;
+}
+
+export interface HardwareNIC {
+  name: string;
+  mac: string;
+  ips: string[];
+}
+
+export interface Hardware {
+  hostname: string;
+  platform: string;
+  platform_version: string;
+  kernel_version: string;
+  virtualization?: string;
+  cpu_model: string;
+  cpu_cores: number;
+  mem_total: number;
+  disks: HardwareDisk[];
+  nics: HardwareNIC[];
+}
+
+export interface Package {
+  name: string;
+  version: string;
+  arch?: string;
+}
+
+export interface ServiceState {
+  name: string;
+  state: string;
+}
+
+export interface Inventory {
+  hw: Hardware | null;
+  hw_collected_at: string | null;
+  packages: Package[];
+  sw_collected_at: string | null;
+  services: ServiceState[];
+  services_updated_at: string | null;
+}
+
+export const getInventory = (deviceId: string) =>
+  request<Inventory>("GET", `/devices/${deviceId}/inventory`);
+
+export const refreshInventory = (deviceId: string) =>
+  request<{ requested: boolean }>(
+    "POST",
+    `/devices/${deviceId}/inventory/refresh`,
+  );
+
+// ---- Policies ----
+
+export type PolicyScopeType = "tenant" | "customer" | "site" | "device";
+
+export interface Policy {
+  id: string;
+  name: string;
+  scope_type: PolicyScopeType;
+  scope_id: string | null;
+  enabled: boolean;
+  rules: PolicyRules;
+  channel_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThresholdRule {
+  threshold: number;
+  severity?: "warning" | "critical";
+}
+
+export interface DiskRule {
+  threshold: number;
+  mounts?: string[];
+  severity?: "warning" | "critical";
+}
+
+export interface OfflineRule {
+  after_s: number;
+  severity?: "warning" | "critical";
+}
+
+export interface ServiceRule {
+  services: string[];
+  severity?: "warning" | "critical";
+}
+
+export interface PolicyRules {
+  cpu_pct?: ThresholdRule;
+  mem_pct?: ThresholdRule;
+  disk_pct?: DiskRule;
+  offline?: OfflineRule;
+  service_down?: ServiceRule;
+}
+
+export interface PolicyBody {
+  name: string;
+  scope_type: PolicyScopeType;
+  scope_id?: string;
+  enabled: boolean;
+  rules: PolicyRules;
+  channel_ids: string[];
+}
+
+export const listPolicies = () =>
+  request<{ policies: Policy[] }>("GET", "/policies");
+
+export const getPolicy = (id: string) =>
+  request<Policy>("GET", `/policies/${id}`);
+
+export const createPolicy = (body: PolicyBody) =>
+  request<{ id: string }>("POST", "/policies", body);
+
+export const updatePolicy = (id: string, body: PolicyBody) =>
+  request<void>("PUT", `/policies/${id}`, body);
+
+export const deletePolicy = (id: string) =>
+  request<void>("DELETE", `/policies/${id}`);
+
+// ---- Alerts ----
+
+export type AlertStatus = "firing" | "resolved";
+
+export interface Alert {
+  id: string;
+  device_id: string;
+  hostname: string;
+  site_id: string;
+  customer_id: string;
+  policy_id: string | null;
+  rule_type: string;
+  dedup_key: string;
+  severity: "warning" | "critical";
+  message: string;
+  details: Record<string, unknown>;
+  channel_ids: string[];
+  status: AlertStatus;
+  fired_at: string;
+  resolved_at: string | null;
+  acked_by: string | null;
+  acked_at: string | null;
+}
+
+export const listAlerts = (params?: { status?: string; limit?: number }) => {
+  const q = new URLSearchParams();
+  if (params?.status) q.set("status", params.status);
+  if (params?.limit) q.set("limit", String(params.limit));
+  const qs = q.toString();
+  return request<{ alerts: Alert[] }>("GET", `/alerts${qs ? `?${qs}` : ""}`);
+};
+
+export const getAlert = (id: string) =>
+  request<Alert>("GET", `/alerts/${id}`);
+
+export const ackAlert = (id: string) =>
+  request<void>("POST", `/alerts/${id}/ack`);
+
+// ---- Notification Channels ----
+
+export type ChannelType = "email" | "webhook";
+
+export interface Channel {
+  id: string;
+  name: string;
+  type: ChannelType;
+  config: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ChannelBody {
+  name: string;
+  type: ChannelType;
+  config: Record<string, unknown>;
+  secret?: string;
+}
+
+export const listChannels = () =>
+  request<{ channels: Channel[] }>("GET", "/channels");
+
+export const createChannel = (body: ChannelBody) =>
+  request<{ id: string }>("POST", "/channels", body);
+
+export const deleteChannel = (id: string) =>
+  request<void>("DELETE", `/channels/${id}`);
+
 // ---- Audit ----
 
 export const listAudit = (params: { limit?: number; before?: string }) => {

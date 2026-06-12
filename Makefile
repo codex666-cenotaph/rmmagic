@@ -1,12 +1,15 @@
 SHELL := /bin/bash
 DATABASE_URL ?= postgres://rmm:rmm-dev-only@localhost:5432/rmm?sslmode=disable
 
-.PHONY: build test test-integration lint vet proto migrate-up migrate-down dev-stack dev-stack-down e2e clean
+.PHONY: build build-web test test-integration lint vet proto migrate-up migrate-down dev-stack dev-stack-down dev e2e clean
 
 build:
 	cd server && go build ./...
 	cd agent && CGO_ENABLED=0 go build ./...
 	cd shared && go build ./...
+
+build-web:
+	cd web && npm ci && npm run build
 
 test:
 	cd server && go test ./...
@@ -42,6 +45,20 @@ dev-stack:
 
 dev-stack-down:
 	docker compose down
+
+# dev starts the backend (port 8080) and the Vite HMR dev server (port
+# 5173) together. Open http://localhost:5173 in your browser; API
+# requests are proxied to the backend automatically by vite.config.ts.
+# Requires dev-stack to be running first (make dev-stack).
+dev: dev-stack
+	@trap 'kill 0' EXIT; \
+	RMM_DATABASE_URL="$(DATABASE_URL)" \
+	RMM_APP_ROLE=rmm_app \
+	RMM_MASTER_KEY=$$(grep RMM_MASTER_KEY .env 2>/dev/null | cut -d= -f2 || echo "0000000000000000000000000000000000000000000000000000000000000000") \
+	RMM_COOKIE_SECURE=false \
+	go run ./server/cmd/rmmserver & \
+	cd web && npm run dev & \
+	wait
 
 e2e: dev-stack
 	@echo "e2e harness lands in M2 (agent enrollment round-trip)"

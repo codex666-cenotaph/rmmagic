@@ -20,6 +20,8 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/notify"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
 
@@ -35,6 +37,11 @@ type Worker struct {
 	// online agents immediately instead of waiting for reconnect drain.
 	Gateway  *gateway.Gateway
 	Interval time.Duration
+	// Notify sends alert notifications; nil leaves the outbox queued
+	// (e.g. a worker pool without SMTP/network egress).
+	Notify *notify.Notifier
+	// Box unseals webhook signing secrets.
+	Box *secrets.Box
 }
 
 func New(st *store.Store, log *slog.Logger, gw *gateway.Gateway) *Worker {
@@ -119,6 +126,14 @@ func (w *Worker) tickTenant(ctx context.Context, tenantID uuid.UUID) {
 				})
 			}
 		}
+	}
+
+	// Evaluate monitoring policies and fan out alert notifications.
+	if err := w.evaluateAlerts(ctx, tenantID); err != nil {
+		w.Log.Error("worker: alert evaluation failed", "tenant_id", tenantID, "error", err)
+	}
+	if err := w.deliverNotifications(ctx, tenantID); err != nil {
+		w.Log.Error("worker: notification delivery failed", "tenant_id", tenantID, "error", err)
 	}
 }
 

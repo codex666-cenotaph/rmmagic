@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -97,6 +98,7 @@ func runBootstrap(log *slog.Logger, args []string) {
 func runServe(log *slog.Logger) {
 	var listenAddr string
 	roles := flag.String("roles", "api,gateway,worker", "comma-separated roles to run: api,gateway,worker")
+	webDir := flag.String("web-dir", envOr("RMM_WEB_DIR", ""), "directory of built web assets to serve (empty = no UI)")
 	flag.StringVar(&listenAddr, "listen", envOr("RMM_LISTEN", ":8080"), "HTTP listen address")
 	flag.Parse()
 
@@ -147,12 +149,30 @@ func runServe(log *slog.Logger) {
 			mux.Handle("/api/v1/", srv.Handler())
 			mux.Handle("/agent/v1/enroll", srv.Handler())
 			mux.Handle("/agent/v1/stats", srv.Handler())
+			mux.Handle("/agent/v1/inventory", srv.Handler())
 		}
 		if enabled["worker"] {
 			// gw is nil when the gateway role runs elsewhere; schedule-fired
 			// jobs then reach agents via reconnect drain instead.
 			go worker.New(st, log, gw).Run(ctx)
 		}
+	}
+
+	// Serve pre-built web assets when --web-dir is set. Any path that
+	// does not match a registered route falls through to the SPA shell.
+	if *webDir != "" {
+		fsys := os.DirFS(*webDir)
+		fileServer := http.FileServer(http.FS(fsys))
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// Try the exact file first; fall back to index.html so the
+			// React router handles client-side navigation.
+			if _, err := fs.Stat(fsys, strings.TrimPrefix(r.URL.Path, "/")); err == nil {
+				fileServer.ServeHTTP(w, r)
+				return
+			}
+			http.ServeFileFS(w, r, fsys, "index.html")
+		})
+		log.Info("serving web UI", "dir", *webDir)
 	}
 
 	httpSrv := &http.Server{

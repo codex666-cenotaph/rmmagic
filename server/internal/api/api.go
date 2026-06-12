@@ -124,10 +124,29 @@ func (s *Server) Routes() []Route {
 		{Method: "PUT", Pattern: "/api/v1/schedules/{id}", Perm: auth.PermScriptsExecute, Handler: s.handleUpdateSchedule},
 		{Method: "DELETE", Pattern: "/api/v1/schedules/{id}", Perm: auth.PermScriptsExecute, Handler: s.handleDeleteSchedule},
 
+		{Method: "GET", Pattern: "/api/v1/devices/{id}/inventory", Perm: auth.PermDevicesRead, Handler: s.handleGetInventory},
+		{Method: "POST", Pattern: "/api/v1/devices/{id}/inventory/refresh", Perm: auth.PermDevicesManage, Handler: s.handleRefreshInventory},
+		{Method: "GET", Pattern: "/api/v1/devices/{id}/effective-policy", Perm: auth.PermPoliciesRead, Handler: s.handleEffectivePolicy},
+
+		{Method: "GET", Pattern: "/api/v1/policies", Perm: auth.PermPoliciesRead, Handler: s.handleListPolicies},
+		{Method: "POST", Pattern: "/api/v1/policies", Perm: auth.PermPoliciesManage, Handler: s.handleCreatePolicy},
+		{Method: "GET", Pattern: "/api/v1/policies/{id}", Perm: auth.PermPoliciesRead, Handler: s.handleGetPolicy},
+		{Method: "PUT", Pattern: "/api/v1/policies/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleUpdatePolicy},
+		{Method: "DELETE", Pattern: "/api/v1/policies/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleDeletePolicy},
+
+		{Method: "GET", Pattern: "/api/v1/alerts", Perm: auth.PermAlertsRead, Handler: s.handleListAlerts},
+		{Method: "GET", Pattern: "/api/v1/alerts/{id}", Perm: auth.PermAlertsRead, Handler: s.handleGetAlert},
+		{Method: "POST", Pattern: "/api/v1/alerts/{id}/ack", Perm: auth.PermAlertsManage, Handler: s.handleAckAlert},
+
+		{Method: "GET", Pattern: "/api/v1/channels", Perm: auth.PermPoliciesRead, Handler: s.handleListChannels},
+		{Method: "POST", Pattern: "/api/v1/channels", Perm: auth.PermPoliciesManage, Handler: s.handleCreateChannel},
+		{Method: "DELETE", Pattern: "/api/v1/channels/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleDeleteChannel},
+
 		// Agent-facing: no user session; each handler authenticates the
 		// device itself (enrollment token / Ed25519 request signature).
 		{Method: "POST", Pattern: "/agent/v1/enroll", Public: true, Handler: s.handleAgentEnroll},
 		{Method: "POST", Pattern: "/agent/v1/stats", Public: true, Handler: s.handleAgentStats},
+		{Method: "POST", Pattern: "/agent/v1/inventory", Public: true, Handler: s.handleAgentInventory},
 	}
 }
 

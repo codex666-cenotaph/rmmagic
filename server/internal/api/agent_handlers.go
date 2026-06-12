@@ -22,7 +22,14 @@ import (
 // because no user session is involved; each performs its own device
 // authentication (enrollment token, or Ed25519 request signature).
 
-const maxStatsBatch = 120 // samples per request
+const (
+	maxStatsBatch = 120 // samples per request
+	// Inventory uploads carry the full package list; well above stats
+	// payloads but still bounded.
+	maxInventoryBytes = 2 << 20
+	maxPackages       = 20000
+	maxServices       = 2000
+)
 
 func (s *Server) handleAgentEnroll(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -143,6 +150,9 @@ func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Samples []store.StatsSample `json:"samples"`
+		// Optional snapshot of systemd service states, refreshed with
+		// every upload so service-down policies evaluate fresh data.
+		Services []store.ServiceState `json:"services,omitempty"`
 	}
 	if err := jsonUnmarshalStrict(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -150,6 +160,10 @@ func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Samples) == 0 || len(req.Samples) > maxStatsBatch {
 		writeError(w, http.StatusBadRequest, "samples must contain 1-120 entries")
+		return
+	}
+	if len(req.Services) > maxServices {
+		writeError(w, http.StatusBadRequest, "too many services")
 		return
 	}
 	now := time.Now()
@@ -162,10 +176,76 @@ func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	err = s.Store.WithTenant(r.Context(), tenantID, func(tx pgx.Tx) error {
-		return store.InsertStats(r.Context(), tx, tenantID, deviceID, req.Samples)
+		if err := store.InsertStats(r.Context(), tx, tenantID, deviceID, req.Samples); err != nil {
+			return err
+		}
+		if req.Services != nil {
+			return store.UpsertServices(r.Context(), tx, tenantID, deviceID, req.Services)
+		}
+		return nil
 	})
 	if err != nil {
 		s.Log.Error("stats insert failed", "device_id", deviceID, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, struct{}{})
+}
+
+// handleAgentInventory ingests a full inventory upload (hardware,
+// installed packages, service states), replacing the previous
+// snapshot. Sent by agents on start, every 12h, and on the
+// INVENTORY_REFRESH command.
+func (s *Server) handleAgentInventory(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxInventoryBytes))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "body too large")
+		return
+	}
+	deviceID, tenantID, err := s.authDeviceRequest(r, body)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "device authentication failed")
+		return
+	}
+
+	var req struct {
+		CollectedAt time.Time               `json:"collected_at"`
+		HW          *store.Hardware         `json:"hw"`
+		Packages    []store.SoftwarePackage `json:"packages"`
+		Services    []store.ServiceState    `json:"services,omitempty"`
+	}
+	if err := jsonUnmarshalStrict(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.HW == nil {
+		writeError(w, http.StatusBadRequest, "hw is required")
+		return
+	}
+	if len(req.Packages) > maxPackages || len(req.Services) > maxServices {
+		writeError(w, http.StatusBadRequest, "inventory too large")
+		return
+	}
+	collectedAt := req.CollectedAt
+	now := time.Now()
+	if collectedAt.IsZero() || collectedAt.After(now.Add(time.Minute)) || collectedAt.Before(now.Add(-24*time.Hour)) {
+		collectedAt = now
+	}
+
+	err = s.Store.WithTenant(r.Context(), tenantID, func(tx pgx.Tx) error {
+		if err := store.UpsertHardware(r.Context(), tx, tenantID, deviceID, *req.HW, collectedAt); err != nil {
+			return err
+		}
+		if err := store.UpsertSoftware(r.Context(), tx, tenantID, deviceID, req.Packages, collectedAt); err != nil {
+			return err
+		}
+		if req.Services != nil {
+			return store.UpsertServices(r.Context(), tx, tenantID, deviceID, req.Services)
+		}
+		return nil
+	})
+	if err != nil {
+		s.Log.Error("inventory upsert failed", "device_id", deviceID, "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

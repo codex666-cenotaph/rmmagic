@@ -320,6 +320,22 @@ func (g *Gateway) touch(ctx context.Context, tenantID, deviceID uuid.UUID, agent
 	})
 }
 
+// RequestInventoryRefresh asks a connected agent to re-collect and
+// upload its inventory immediately. Fire-and-forget: the agent's
+// result for the ad-hoc command ID matches no job and is ignored.
+// Returns false when the device is not connected to this gateway.
+func (g *Gateway) RequestInventoryRefresh(ctx context.Context, deviceID uuid.UUID) bool {
+	return g.Registry.Send(ctx, deviceID, &rmmpb.Envelope{
+		MessageId: uuid.NewString(),
+		Payload: &rmmpb.Envelope_CommandRequest{CommandRequest: &rmmpb.CommandRequest{
+			CommandId: "invrefresh-" + uuid.NewString(),
+			Kind:      rmmpb.CommandKind_COMMAND_KIND_INVENTORY_REFRESH,
+			ExpiresAt: timestamppb.New(time.Now().Add(5 * time.Minute)),
+			TimeoutS:  120,
+		}},
+	})
+}
+
 // Decommission notifies a live agent and closes its connection.
 func (g *Gateway) Decommission(ctx context.Context, deviceID uuid.UUID) {
 	g.Registry.Send(ctx, deviceID, &rmmpb.Envelope{

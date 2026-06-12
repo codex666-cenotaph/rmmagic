@@ -363,3 +363,145 @@ pre.details {
   display: grid;
   gap: 12px;
 }
+
+/* Tabs */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+button.tab {
+  background: transparent;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 5px 14px;
+  cursor: pointer;
+  color: #4a5568;
+  font-size: 14px;
+}
+
+button.tab:hover {
+  background: #f7fafc;
+}
+
+button.tab.active {
+  background: #2b6cb0;
+  color: #fff;
+  border-color: #2b6cb0;
+}
+
+/* Badge variants */
+
+.badge-ok {
+  background: #c6f6d5;
+  color: #22543d;
+}
+
+.badge-warn {
+  background: #fefcbf;
+  color: #744210;
+}
+
+.badge-error {
+  background: #fed7d7;
+  color: #822727;
+}
+
+/* Toolbar */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.toolbar h2 {
+  margin: 0;
+  flex: 1;
+}
+
+/* KV table */
+
+.kv-table th {
+  text-align: left;
+  padding: 4px 12px 4px 0;
+  color: #718096;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.kv-table td {
+  padding: 4px 0;
+}
+
+/* Card header/body */
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.card-body {
+  font-size: 14px;
+}
+
+.rule-list {
+  margin: 4px 0 8px 0;
+  padding-left: 20px;
+}
+
+/* Filter input */
+
+.filter-input {
+  width: 100%;
+  max-width: 340px;
+  margin-bottom: 10px;
+  padding: 5px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+/* Monospace */
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Form */
+
+.form {
+  display: grid;
+  gap: 12px;
+  max-width: 480px;
+}
+
+.form label {
+  display: grid;
+  gap: 4px;
+  font-size: 14px;
+}
+
+.form fieldset {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.form fieldset legend {
+  font-size: 13px;
+  color: #718096;
+  padding: 0 4px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 8px;
+}

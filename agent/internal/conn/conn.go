@@ -113,6 +113,7 @@ func NewAgent(id *identity.Identity, log *slog.Logger, journal *agentexec.Journa
 // done or the device is decommissioned.
 func (a *Agent) Run(ctx context.Context) error {
 	go a.statsLoop(ctx)
+	go a.inventoryLoop(ctx)
 
 	backoff := time.Second
 	for {
@@ -323,7 +324,24 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 	var result agentexec.Result
 	pbStatus := rmmpb.CommandStatus_COMMAND_STATUS_FAILED
 
-	if req.Kind == rmmpb.CommandKind_COMMAND_KIND_SCRIPT {
+	if req.Kind == rmmpb.CommandKind_COMMAND_KIND_INVENTORY_REFRESH {
+		// Fire-and-forget: collect and upload, then ACK success.
+		go func() {
+			if err := a.uploadInventory(ctx); err != nil {
+				a.Log.Warn("inventory refresh upload failed", "error", err)
+			}
+		}()
+		_ = write(ctx, ws, &rmmpb.Envelope{
+			MessageId: uuid.NewString(),
+			Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
+				CommandId:  req.CommandId,
+				Status:     rmmpb.CommandStatus_COMMAND_STATUS_SUCCEEDED,
+				StartedAt:  timestamppb.Now(),
+				FinishedAt: timestamppb.Now(),
+			}},
+		})
+		return
+	} else if req.Kind == rmmpb.CommandKind_COMMAND_KIND_SCRIPT {
 		spec, err := agentexec.ParseSpec(req.Spec)
 		if err != nil {
 			a.Log.Error("bad command spec", "command_id", req.CommandId, "error", err)
@@ -367,6 +385,78 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 			FinishedAt: timestamppb.New(result.FinishedAt),
 		}},
 	})
+}
+
+const inventoryInterval = 12 * time.Hour
+
+// inventoryLoop uploads hardware/package/service inventory on startup
+// and every 12 hours thereafter.
+func (a *Agent) inventoryLoop(ctx context.Context) {
+	// Upload immediately on start, then on schedule.
+	if err := a.uploadInventory(ctx); err != nil {
+		a.Log.Warn("initial inventory upload failed", "error", err)
+	}
+	t := time.NewTicker(inventoryInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := a.uploadInventory(ctx); err != nil {
+				a.Log.Warn("inventory upload failed", "error", err)
+			}
+		}
+	}
+}
+
+func (a *Agent) uploadInventory(ctx context.Context) error {
+	hw, err := collect.CollectHardware(ctx)
+	if err != nil {
+		return fmt.Errorf("collect hw: %w", err)
+	}
+	pkgs, err := collect.CollectPackages(ctx)
+	if err != nil {
+		return fmt.Errorf("collect packages: %w", err)
+	}
+	svcs, err := collect.CollectServices(ctx)
+	if err != nil {
+		return fmt.Errorf("collect services: %w", err)
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"collected_at": time.Now().UTC(),
+		"hw":          hw,
+		"packages":    pkgs,
+		"services":    svcs,
+	})
+	if err != nil {
+		return err
+	}
+
+	ts := time.Now().Unix()
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		a.ID.ServerURL+"/agent/v1/inventory", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Device-Id", a.ID.DeviceID)
+	req.Header.Set("X-Timestamp", strconv.FormatInt(ts, 10))
+	req.Header.Set("X-Signature",
+		base64.StdEncoding.EncodeToString(devicesig.SignRequest(a.Key, ts, body)))
+
+	resp, err := a.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096)) //nolint:errcheck
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("inventory rejected: %d", resp.StatusCode)
+	}
+	a.Log.Info("inventory uploaded", "packages", len(pkgs), "services", len(svcs))
+	return nil
 }
 
 func read(ctx context.Context, ws *websocket.Conn) (*rmmpb.Envelope, error) {

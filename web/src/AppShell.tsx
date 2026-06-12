@@ -5,6 +5,8 @@ import { useAuth } from "./auth";
 
 const NAV = [
   { to: "/devices", label: "Devices" },
+  { to: "/alerts", label: "Alerts", perm: "alerts.read" },
+  { to: "/policies", label: "Policies", perm: "policies.read" },
   { to: "/scripts", label: "Scripts", perm: "scripts.read" },
   { to: "/jobs", label: "Jobs", perm: "scripts.read" },
   { to: "/schedules", label: "Schedules", perm: "scripts.read" },

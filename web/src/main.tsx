@@ -20,6 +20,8 @@ import { CustomersPage } from "./pages/CustomersPage";
 import { UsersPage } from "./pages/UsersPage";
 import { TokensPage } from "./pages/TokensPage";
 import { AuditPage } from "./pages/AuditPage";
+import { AlertsPage } from "./pages/AlertsPage";
+import { PoliciesPage } from "./pages/PoliciesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import "./styles.css";
 
@@ -62,6 +64,8 @@ createRoot(document.getElementById("root")!).render(
             <Route path="/users" element={<UsersPage />} />
             <Route path="/tokens" element={<TokensPage />} />
             <Route path="/audit" element={<AuditPage />} />
+            <Route path="/alerts" element={<AlertsPage />} />
+            <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Route>
           <Route path="*" element={<Navigate to="/devices" replace />} />
