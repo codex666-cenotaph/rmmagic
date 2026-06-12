@@ -166,5 +166,12 @@ HOST=$(hostname -I | awk '{print $1}')
 echo ""
 docker compose -f "$COMPOSE_FILE" ps
 echo ""
-echo "  Dashboard : http://${HOST}:${PORT}"
+echo "  Dashboard    : http://${HOST}:${PORT}"
+echo "  Agent enroll : create a token on the Enrollment page, then on the endpoint:"
+echo "                 sudo rmmagent enroll --server http://${HOST}:${PORT} --token rmme_..."
 echo ""
+if [[ "${RMM_COOKIE_SECURE:-false}" != "true" ]]; then
+  echo "  Note: RMM_COOKIE_SECURE=false (plain HTTP). Put this behind TLS and set"
+  echo "        RMM_COOKIE_SECURE=true before exposing it to untrusted networks."
+  echo ""
+fi
