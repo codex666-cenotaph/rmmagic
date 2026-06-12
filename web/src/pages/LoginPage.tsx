@@ -16,7 +16,7 @@ export function LoginPage() {
 
   async function finishLogin() {
     await qc.invalidateQueries({ queryKey: ["me"] });
-    navigate("/devices", { replace: true });
+    navigate("/dashboard", { replace: true });
   }
 
   async function onSubmitCredentials(e: FormEvent) {

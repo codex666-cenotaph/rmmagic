@@ -8,8 +8,10 @@ import {
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { ApiError } from "./api/client";
 import { RequireAuth } from "./auth";
+import { ThemeProvider } from "./theme";
 import { AppShell } from "./AppShell";
 import { LoginPage } from "./pages/LoginPage";
+import { DashboardPage } from "./pages/DashboardPage";
 import { DevicesPage } from "./pages/DevicesPage";
 import { DeviceDetailPage } from "./pages/DeviceDetailPage";
 import { ScriptsPage } from "./pages/ScriptsPage";
@@ -43,34 +45,37 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route
-            element={
-              <RequireAuth>
-                <AppShell />
-              </RequireAuth>
-            }
-          >
-            <Route path="/devices" element={<DevicesPage />} />
-            <Route path="/devices/:id" element={<DeviceDetailPage />} />
-            <Route path="/scripts" element={<ScriptsPage />} />
-            <Route path="/jobs" element={<JobsPage />} />
-            <Route path="/schedules" element={<SchedulesPage />} />
-            <Route path="/enroll" element={<EnrollPage />} />
-            <Route path="/customers" element={<CustomersPage />} />
-            <Route path="/users" element={<UsersPage />} />
-            <Route path="/tokens" element={<TokensPage />} />
-            <Route path="/audit" element={<AuditPage />} />
-            <Route path="/alerts" element={<AlertsPage />} />
-            <Route path="/policies" element={<PoliciesPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-          </Route>
-          <Route path="*" element={<Navigate to="/devices" replace />} />
-        </Routes>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              element={
+                <RequireAuth>
+                  <AppShell />
+                </RequireAuth>
+              }
+            >
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/devices" element={<DevicesPage />} />
+              <Route path="/devices/:id" element={<DeviceDetailPage />} />
+              <Route path="/scripts" element={<ScriptsPage />} />
+              <Route path="/jobs" element={<JobsPage />} />
+              <Route path="/schedules" element={<SchedulesPage />} />
+              <Route path="/enroll" element={<EnrollPage />} />
+              <Route path="/customers" element={<CustomersPage />} />
+              <Route path="/users" element={<UsersPage />} />
+              <Route path="/tokens" element={<TokensPage />} />
+              <Route path="/audit" element={<AuditPage />} />
+              <Route path="/alerts" element={<AlertsPage />} />
+              <Route path="/policies" element={<PoliciesPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ThemeProvider>
   </StrictMode>,
 );

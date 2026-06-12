@@ -550,7 +550,7 @@ function Sparkline({
         <polyline
           points={points}
           fill="none"
-          stroke="#2b6cb0"
+          stroke="var(--accent)"
           strokeWidth="1.5"
           vectorEffect="non-scaling-stroke"
         />
