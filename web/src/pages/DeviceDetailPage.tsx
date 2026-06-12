@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { ReactNode, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import * as api from "../api/client";
@@ -9,6 +9,7 @@ import {
   fmtBytes,
   fmtRelative,
 } from "../components/ui";
+import { StatCard } from "../components/charts";
 
 type Tab = "stats" | "inventory" | "alerts";
 
@@ -63,34 +64,33 @@ export function DeviceDetailPage() {
     );
 
   const d = device.data!;
-  const samples = stats.data?.samples ?? [];
-  const latest = samples.length > 0 ? samples[samples.length - 1] : null;
-  const memMax = samples.reduce((m, s) => Math.max(m, s.mem_total), 0);
+  const decommissioned = d.status === "decommissioned";
+  const dotClass = decommissioned ? "decom" : d.online ? "online" : "offline";
 
   return (
-    <div>
-      <p>
+    <div className="device-page">
+      <div className="hero-breadcrumb">
         <Link to="/devices">&larr; All devices</Link>
-      </p>
-      <h1>{d.hostname}</h1>
-      <div className="card">
-        <div className="device-meta">
-          <span>
-            {d.customer_name} <span className="muted">/ {d.site_name}</span>
-          </span>
-          <span>
-            {d.os} <span className="muted">({d.arch})</span>
-          </span>
-          <span>
-            agent <span className="muted">{d.agent_version}</span>
-          </span>
-          <span>
+      </div>
+
+      <div className="device-hero card">
+        <div className="hero-main">
+          <div className="hero-title">
+            <span className={`status-dot ${dotClass}`} aria-hidden="true" />
+            <h1>{d.hostname}</h1>
             <DeviceStatusBadge status={d.status} online={d.online} />
-          </span>
-          <span>
-            last seen <span className="muted">{fmtRelative(d.last_seen_at)}</span>
-          </span>
-          {canManage && d.status !== "decommissioned" && (
+          </div>
+          <div className="hero-meta">
+            <MetaItem label="Customer" value={d.customer_name} />
+            <MetaItem label="Site" value={d.site_name} />
+            <MetaItem label="Operating system" value={`${d.os} (${d.arch})`} />
+            <MetaItem label="Agent version" value={d.agent_version} mono />
+            <MetaItem label="Last seen" value={fmtRelative(d.last_seen_at)} />
+            <MetaItem label="Enrolled" value={fmtRelative(d.created_at)} />
+          </div>
+        </div>
+        {canManage && !decommissioned && (
+          <div className="hero-actions">
             <button
               type="button"
               className="danger"
@@ -106,10 +106,10 @@ export function DeviceDetailPage() {
             >
               Decommission
             </button>
-          )}
-        </div>
-        <ErrorText error={decommissionMut.error} />
+          </div>
+        )}
       </div>
+      <ErrorText error={decommissionMut.error} />
 
       <div className="tabs">
         {(["stats", "inventory", "alerts"] as Tab[]).map((t) => (
@@ -125,62 +125,11 @@ export function DeviceDetailPage() {
       </div>
 
       {tab === "stats" && (
-        <>
-          <h2>Stats (last hour)</h2>
-          {stats.isLoading && <p>Loading stats…</p>}
-          <ErrorText error={stats.error} />
-          {!stats.isLoading && !stats.error && samples.length === 0 && (
-            <p className="muted">No data yet.</p>
-          )}
-          {samples.length > 0 && (
-            <>
-              <div className="chart card">
-                <h3>CPU %</h3>
-                <Sparkline
-                  values={samples.map((s) => s.cpu_pct)}
-                  yMin={0}
-                  yMax={100}
-                  fmtLabel={(v) => `${Math.round(v)}%`}
-                />
-              </div>
-              <div className="chart card">
-                <h3>Memory used</h3>
-                <Sparkline
-                  values={samples.map((s) => s.mem_used)}
-                  yMin={0}
-                  yMax={memMax > 0 ? memMax : 1}
-                  fmtLabel={fmtBytes}
-                />
-              </div>
-              <div className="chart card">
-                <h3>Disk usage</h3>
-                {latest && latest.disks.length === 0 && (
-                  <p className="muted">No data yet.</p>
-                )}
-                {latest &&
-                  latest.disks.map((disk) => {
-                    const pct =
-                      disk.total > 0 ? (disk.used / disk.total) * 100 : 0;
-                    return (
-                      <div key={disk.mount} className="disk-row">
-                        <span className="disk-mount">{disk.mount}</span>
-                        <span className="disk-bar">
-                          <span
-                            className="disk-bar-fill"
-                            style={{ width: `${Math.min(pct, 100)}%` }}
-                          />
-                        </span>
-                        <span className="muted">
-                          {fmtBytes(disk.used)} / {fmtBytes(disk.total)} (
-                          {pct.toFixed(0)}%)
-                        </span>
-                      </div>
-                    );
-                  })}
-              </div>
-            </>
-          )}
-        </>
+        <StatsTab
+          samples={stats.data?.samples ?? []}
+          isLoading={stats.isLoading}
+          error={stats.error}
+        />
       )}
 
       {tab === "inventory" && (
@@ -517,48 +466,203 @@ function AlertsTab({
   );
 }
 
-function Sparkline({
+function MetaItem({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div className="meta-item">
+      <span className="meta-label">{label}</span>
+      <span className={mono ? "meta-value mono" : "meta-value"}>{value}</span>
+    </div>
+  );
+}
+
+function StatsTab({
+  samples,
+  isLoading,
+  error,
+}: {
+  samples: api.StatsSample[];
+  isLoading: boolean;
+  error: unknown;
+}) {
+  if (isLoading) return <p>Loading stats…</p>;
+  if (error) return <ErrorText error={error} />;
+  if (samples.length === 0) {
+    return (
+      <div className="panel">
+        <p className="muted">
+          No telemetry yet. Charts fill in as the agent reports (≈60s interval).
+        </p>
+      </div>
+    );
+  }
+
+  const latest = samples[samples.length - 1];
+  const memMax = samples.reduce((m, s) => Math.max(m, s.mem_total), 0);
+  const memPct = latest.mem_total > 0 ? (latest.mem_used / latest.mem_total) * 100 : 0;
+  const disks = latest.disks ?? [];
+  const peakDisk = disks.reduce(
+    (best, dk) => {
+      const pct = dk.total > 0 ? (dk.used / dk.total) * 100 : 0;
+      return pct > best.pct ? { pct, mount: dk.mount } : best;
+    },
+    { pct: 0, mount: "—" },
+  );
+
+  return (
+    <div className="stats-tab">
+      <div className="stat-grid">
+        <StatCard
+          label="CPU"
+          value={`${Math.round(latest.cpu_pct)}%`}
+          sub="current utilization"
+          tone={latest.cpu_pct >= 90 ? "error" : latest.cpu_pct >= 70 ? "warn" : "ok"}
+        />
+        <StatCard
+          label="Memory"
+          value={`${Math.round(memPct)}%`}
+          sub={`${fmtBytes(latest.mem_used)} / ${fmtBytes(latest.mem_total)}`}
+          tone={memPct >= 90 ? "error" : memPct >= 75 ? "warn" : "ok"}
+        />
+        <StatCard
+          label="Disk (peak)"
+          value={`${Math.round(peakDisk.pct)}%`}
+          sub={peakDisk.mount}
+          tone={peakDisk.pct >= 90 ? "error" : peakDisk.pct >= 75 ? "warn" : "ok"}
+        />
+      </div>
+
+      <div className="chart-grid">
+        <MetricCard
+          title="CPU utilization"
+          current={`${Math.round(latest.cpu_pct)}%`}
+          values={samples.map((s) => s.cpu_pct)}
+          yMin={0}
+          yMax={100}
+          color="var(--accent)"
+        />
+        <MetricCard
+          title="Memory used"
+          current={fmtBytes(latest.mem_used)}
+          values={samples.map((s) => s.mem_used)}
+          yMin={0}
+          yMax={memMax > 0 ? memMax : 1}
+          color="var(--chart-4)"
+        />
+      </div>
+
+      <div className="panel">
+        <h2>Disk usage</h2>
+        {disks.length === 0 ? (
+          <p className="muted">No disk data yet.</p>
+        ) : (
+          disks.map((disk) => {
+            const pct = disk.total > 0 ? (disk.used / disk.total) * 100 : 0;
+            const color =
+              pct >= 90 ? "var(--error)" : pct >= 75 ? "var(--warn)" : "var(--accent)";
+            return (
+              <div key={disk.mount} className="disk-row">
+                <span className="disk-mount">{disk.mount}</span>
+                <span className="disk-bar">
+                  <span
+                    className="disk-bar-fill"
+                    style={{ width: `${Math.min(pct, 100)}%`, background: color }}
+                  />
+                </span>
+                <span className="muted disk-figures">
+                  {fmtBytes(disk.used)} / {fmtBytes(disk.total)} ({pct.toFixed(0)}%)
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+      <p className="muted">Showing the last hour. Refreshes every 30s.</p>
+    </div>
+  );
+}
+
+function MetricCard({
+  title,
+  current,
   values,
   yMin,
   yMax,
-  fmtLabel,
+  color,
+}: {
+  title: string;
+  current: string;
+  values: number[];
+  yMin: number;
+  yMax: number;
+  color: string;
+}) {
+  return (
+    <div className="panel metric-card">
+      <div className="metric-head">
+        <h2>{title}</h2>
+        <span className="metric-current" style={{ color }}>
+          {current}
+        </span>
+      </div>
+      <AreaSpark values={values} yMin={yMin} yMax={yMax} color={color} />
+    </div>
+  );
+}
+
+function AreaSpark({
+  values,
+  yMin,
+  yMax,
+  color,
 }: {
   values: number[];
   yMin: number;
   yMax: number;
-  fmtLabel: (v: number) => string;
+  color: string;
 }) {
-  const W = 300;
-  const H = 80;
+  const gradId = useId();
+  const W = 320;
+  const H = 84;
   if (values.length === 0) return <p className="muted">No data yet.</p>;
   const span = yMax - yMin || 1;
-  const points = values
-    .map((v, i) => {
-      const x = values.length === 1 ? W / 2 : (i / (values.length - 1)) * W;
-      const y = H - ((Math.min(Math.max(v, yMin), yMax) - yMin) / span) * H;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
+  const xy = (v: number, i: number) => {
+    const x = values.length === 1 ? W / 2 : (i / (values.length - 1)) * W;
+    const y = H - ((Math.min(Math.max(v, yMin), yMax) - yMin) / span) * H;
+    return [x, y] as const;
+  };
+  const line = values.map((v, i) => xy(v, i).join(",")).join(" ");
+  const [lastX, lastY] = xy(values[values.length - 1], values.length - 1);
+  const area = `0,${H} ${line} ${W},${H}`;
   return (
-    <div className="chart-body">
-      <svg
-        className="sparkline"
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        role="img"
-      >
-        <polyline
-          points={points}
-          fill="none"
-          stroke="var(--accent)"
-          strokeWidth="1.5"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-      <div className="chart-labels">
-        <span>{fmtLabel(yMax)}</span>
-        <span>{fmtLabel(yMin)}</span>
-      </div>
-    </div>
+    <svg
+      className="area-spark"
+      viewBox={`0 0 ${W} ${H}`}
+      preserveAspectRatio="none"
+      role="img"
+    >
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.28" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={area} fill={`url(#${gradId})`} />
+      <polyline
+        points={line}
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        vectorEffect="non-scaling-stroke"
+      />
+      <circle cx={lastX} cy={lastY} r="3" fill={color} vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }
