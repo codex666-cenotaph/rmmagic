@@ -101,6 +101,31 @@ if [[ ! -f "$ENV_FILE" ]]; then
   } > "$ENV_FILE"
   ok ".env created"
   BUILD=true
+
+  # Guard against a stale Postgres volume from an earlier deploy. POSTGRES_PASSWORD
+  # only takes effect when the data directory is first initialised; a pre-existing
+  # volume keeps its original password, so the freshly generated credentials above
+  # won't match and migrations fail with "password authentication failed for user
+  # rmm". Since we just created new credentials, any existing volume is stale.
+  PROJECT="${COMPOSE_PROJECT_NAME:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')}"
+  PG_VOLUME="${PROJECT}_pgdata"
+  if docker volume inspect "$PG_VOLUME" >/dev/null 2>&1; then
+    echo ""
+    info "Found an existing Postgres volume '$PG_VOLUME' from a previous deploy."
+    echo "  Its password won't match the credentials just generated, so the server"
+    echo "  would fail to start (password authentication failed)."
+    echo ""
+    prompt WIPE_VOLUME "Remove the old volume and start clean? (destroys existing DB data)" "yes"
+    if [[ "$WIPE_VOLUME" =~ ^[Yy] ]]; then
+      docker compose -f "$COMPOSE_FILE" down -v >/dev/null 2>&1 || true
+      ok "Old volumes removed — Postgres will re-initialise with the new password"
+    else
+      echo ""
+      echo "  Keeping it. If the server fails to start, reset the password to match"
+      echo "  .env, or re-run after: docker compose -f $COMPOSE_FILE down -v"
+      echo ""
+    fi
+  fi
 fi
 
 # ── load .env ────────────────────────────────────────────────────────────────
