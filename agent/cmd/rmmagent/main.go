@@ -21,10 +21,13 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/conn"
 	agentexec "github.com/codex666-cenotaph/rmmagic/agent/internal/exec"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/identity"
+	"github.com/codex666-cenotaph/rmmagic/agent/internal/platform"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
 )
 
-const defaultStateDir = "/var/lib/rmmagent"
+// defaultStateDir is OS-specific: /var/lib/rmmagent on Linux,
+// %ProgramData%\rmmagent on Windows.
+var defaultStateDir = platform.DefaultStateDir()
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))

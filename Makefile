@@ -63,7 +63,7 @@ dev: dev-stack
 e2e: dev-stack
 	@echo "e2e harness lands in M2 (agent enrollment round-trip)"
 
-# Cross-compile static agent binaries for linux amd64/arm64.
+# Cross-compile static agent binaries (linux amd64/arm64, windows amd64).
 agent-binaries:
 	agent/packaging/build.sh --bin-only
 
