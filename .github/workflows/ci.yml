@@ -101,10 +101,8 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
+      # Full history so the gitleaks step can scan every commit, not a shallow clone.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -117,10 +115,18 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           (cd server && govulncheck ./...)
           (cd agent && govulncheck ./...)
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Scan the full history deterministically. gitleaks-action@v2 derives a
+      # commit range from the event (<before>^..<head>); after force-pushes or
+      # resets that base ref is unreachable, so it scanned 0 bytes and reported
+      # a false "no leaks found" while exiting non-zero. A pinned, whole-repo
+      # `detect` has no range dependency. (fetch-depth: 0 above gives full history.)
+      - name: gitleaks (secret scan)
+        run: |
+          ver=8.24.3
+          tmp=$(mktemp -d)
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz" -o "$tmp/gitleaks.tar.gz"
+          tar -xzf "$tmp/gitleaks.tar.gz" -C "$tmp" gitleaks
+          "$tmp/gitleaks" detect --source . --redact -v --exit-code 2
 
   proto:
     runs-on: ubuntu-latest
