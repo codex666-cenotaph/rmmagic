@@ -45,7 +45,7 @@ services:
     image: rmmagic-server:latest
     restart: unless-stopped
     environment:
-      RMM_DATABASE_URL: postgres://rmm:${POSTGRES_PASSWORD}@postgres:5432/rmm?sslmode=disable
+      RMM_DATABASE_URL: "postgres://rmm:${POSTGRES_PASSWORD}@postgres:5432/rmm?sslmode=disable"
       RMM_MASTER_KEY: ${RMM_MASTER_KEY}
       RMM_COOKIE_SECURE: ${RMM_COOKIE_SECURE:-true}
     depends_on:

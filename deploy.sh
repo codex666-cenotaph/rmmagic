@@ -67,8 +67,14 @@ if [[ ! -f "$ENV_FILE" ]]; then
   info "No .env found — let's set one up."
   echo ""
 
-  prompt POSTGRES_PASSWORD  "Postgres password (choose a strong one)"
-  prompt MINIO_ROOT_PASSWORD "MinIO password (choose a strong one)"
+  GENERATED_PG_PASS=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  GENERATED_MINIO_PASS=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  echo "  Generated Postgres password : $GENERATED_PG_PASS"
+  echo "  Generated MinIO password    : $GENERATED_MINIO_PASS"
+  echo "  (hex-only passwords avoid URL encoding issues)"
+  echo ""
+  prompt POSTGRES_PASSWORD   "Postgres password" "$GENERATED_PG_PASS"
+  prompt MINIO_ROOT_PASSWORD "MinIO password"    "$GENERATED_MINIO_PASS"
   prompt HTTP_PORT          "HTTP port" "80"
   prompt RMM_COOKIE_SECURE  "Use secure cookies? (true for HTTPS, false for plain HTTP)" "false"
 
