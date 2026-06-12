@@ -4,14 +4,16 @@ set -euo pipefail
 COMPOSE_FILE="docker-compose.prod.yml"
 ENV_FILE=".env"
 BUILD=false
+BOOTSTRAP=false
 
 usage() {
   cat <<EOF
 Usage: $0 [OPTIONS]
 
 Options:
-  --build   rebuild Docker images from source before deploying
-  --help    show this help
+  --build       rebuild Docker images from source before deploying
+  --bootstrap   re-run tenant bootstrap (use when database was wiped)
+  --help        show this help
 
 On first run this script will:
   1. Create a .env file with generated secrets (interactive)
@@ -21,14 +23,16 @@ On first run this script will:
   5. Bootstrap the first tenant (interactive)
 
 On subsequent runs it just brings services up (add --build to rebuild).
+Use --bootstrap to create a new tenant after wiping the database.
 EOF
   exit 0
 }
 
 for arg in "$@"; do
   case "$arg" in
-    --build) BUILD=true ;;
-    --help|-h) usage ;;
+    --build)     BUILD=true ;;
+    --bootstrap) BOOTSTRAP=true ;;
+    --help|-h)   usage ;;
     *) echo "Unknown argument: $arg"; usage ;;
   esac
 done
@@ -133,7 +137,7 @@ ok "All services healthy"
 
 # ── bootstrap first tenant ────────────────────────────────────────────────────
 
-if $FIRST_RUN; then
+if $FIRST_RUN || $BOOTSTRAP; then
   echo ""
   info "Bootstrap first tenant"
   echo ""
