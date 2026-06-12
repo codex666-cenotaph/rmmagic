@@ -53,6 +53,33 @@ warn() { printf '\033[1;33mWARN\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR\033[0m %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Locate the go toolchain, tolerating sudo's sanitized PATH. A bare `sudo`
+# resets PATH to the sudoers secure_path, so a go installed under
+# /usr/local/go or the invoking user's home is invisible to root. Probe the
+# usual spots, then fall back to the invoking user's login environment.
+find_go() {
+  if have go; then command -v go; return 0; fi
+  local c
+  for c in /usr/local/go/bin/go /usr/lib/go/bin/go /snap/bin/go "$HOME/go/bin/go"; do
+    [[ -x "$c" ]] && { echo "$c"; return 0; }
+  done
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    local g; g="$(sudo -u "$SUDO_USER" sh -lc 'command -v go' 2>/dev/null)"
+    [[ -n "$g" ]] && { echo "$g"; return 0; }
+  fi
+  return 1
+}
+
+# Run a command as the user who invoked sudo (so the repo/module/build
+# caches are used and stay owned by them), or directly if not under sudo.
+as_builder() {
+  if [[ "$(id -u)" == 0 && -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" -H "$@"
+  else
+    "$@"
+  fi
+}
+
 # ask "prompt" "default" -> echoes the answer (default if non-interactive)
 ask() {
   local prompt="$1" default="${2:-}" reply
@@ -119,16 +146,18 @@ if [[ -n "$PREBUILT_BIN" ]]; then
   log "Installing prebuilt binary from $PREBUILT_BIN"
   install -D -m 0755 "$PREBUILT_BIN" "$INSTALLED_BIN"
 else
-  have go || die "go toolchain not found in PATH. Install Go 1.24+, or pass --bin PATH to use a prebuilt binary."
-  log "Building rmmagent from source"
+  GO="$(find_go)" || die "go toolchain not found. (sudo resets PATH, so a go under /usr/local/go or your home may be hidden — try: sudo env \"PATH=\$PATH\" ./install-agent.sh). Install Go 1.24+, or pass --bin PATH to use a prebuilt binary."
+  log "Building rmmagent from source (go: $GO)"
 
-  VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
-  COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  VERSION="$(as_builder git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
+  COMMIT="$(as_builder git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   VPKG="github.com/codex666-cenotaph/rmmagic/shared/version"
   LDFLAGS="-X ${VPKG}.Version=${VERSION} -X ${VPKG}.Commit=${COMMIT}"
 
   tmpbin="$(mktemp)"
-  ( cd "$REPO_ROOT/agent" && CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$tmpbin" ./cmd/rmmagent )
+  # The build runs as the invoking user; make the output writable by them.
+  [[ "$(id -u)" == 0 && -n "${SUDO_USER:-}" ]] && chown "$SUDO_USER" "$tmpbin"
+  as_builder env CGO_ENABLED=0 "$GO" -C "$REPO_ROOT/agent" build -ldflags "$LDFLAGS" -o "$tmpbin" ./cmd/rmmagent
   install -D -m 0755 "$tmpbin" "$INSTALLED_BIN"
   rm -f "$tmpbin"
   log "Installed rmmagent ${VERSION} -> $INSTALLED_BIN"
