@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 DATABASE_URL ?= postgres://rmm:rmm-dev-only@localhost:5432/rmm?sslmode=disable
 
-.PHONY: build test test-integration lint vet proto migrate-up migrate-down dev-stack dev-stack-down e2e clean
+.PHONY: build test test-integration lint vet proto migrate-up migrate-down dev-stack dev-stack-down e2e clean agent-binaries agent-packages
 
 build:
 	cd server && go build ./...
@@ -46,5 +46,15 @@ dev-stack-down:
 e2e: dev-stack
 	@echo "e2e harness lands in M2 (agent enrollment round-trip)"
 
+# Cross-compile static agent binaries for linux amd64/arm64.
+agent-binaries:
+	agent/packaging/build.sh --bin-only
+
+# Build the agent binaries and package them as .deb and .rpm (needs nfpm:
+# go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest). Artifacts land
+# in agent/packaging/dist/.
+agent-packages:
+	agent/packaging/build.sh
+
 clean:
-	rm -rf bin/
+	rm -rf bin/ agent/packaging/dist/

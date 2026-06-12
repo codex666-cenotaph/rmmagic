@@ -1,0 +1,27 @@
+[Unit]
+Description=rmmagic endpoint agent
+Documentation=https://github.com/codex666-cenotaph/rmmagic
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rmmagent run --state-dir /var/lib/rmmagent
+Restart=always
+RestartSec=5s
+
+# Hardening. The agent executes scripts and installs OS packages on the
+# endpoint, so it runs as root with broad privilege — keep these settings
+# conservative and tighten per your threat model.
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/rmmagent
+
+[Install]
+WantedBy=multi-user.target

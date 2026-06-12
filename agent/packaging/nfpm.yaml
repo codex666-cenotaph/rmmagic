@@ -1,0 +1,66 @@
+# nfpm configuration for the rmmagic endpoint agent .deb / .rpm packages.
+# Driven by agent/packaging/build.sh, which builds the per-arch binary and
+# invokes nfpm once per architecture/format. Environment variables expanded
+# at package time:
+#   PKG_VERSION  package version (semver, no leading "v")
+#   PKG_ARCH     Debian/nfpm arch: amd64 | arm64
+#   BIN_DIR      directory holding the prebuilt rmmagent-<arch> binaries
+#
+# Install nfpm with:
+#   go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+name: rmmagent
+arch: "${PKG_ARCH}"
+platform: linux
+version: "${PKG_VERSION}"
+section: admin
+priority: optional
+maintainer: "rmmagic <ops@rmmagic.example>"
+description: |
+  rmmagic endpoint agent — secure remote monitoring & management.
+  Enrolls with a control plane, reports heartbeats/stats/inventory, and
+  executes scripts and package jobs. Runs as a systemd service; enroll
+  with `rmmagent enroll` before starting.
+vendor: "rmmagic"
+homepage: "https://github.com/codex666-cenotaph/rmmagic"
+license: "Proprietary"
+
+# Conflicts/replaces a hand-installed binary at /usr/local/bin via the
+# source installer (deploy/install-agent.sh) — the two should not coexist.
+provides:
+  - rmmagent
+
+contents:
+  # build.sh stages the correct per-arch binary here before invoking nfpm.
+  # (nfpm expands ${ENV} in scalar fields like arch/version, but not in
+  # contents globs, so this path is fixed and the arch comes from PKG_ARCH.)
+  - src: ./.staging/rmmagent
+    dst: /usr/bin/rmmagent
+    file_info:
+      mode: 0755
+
+  - src: ./rmmagent.service
+    dst: /lib/systemd/system/rmmagent.service
+    file_info:
+      mode: 0644
+
+  # Device identity / command journal live here (root-only).
+  - dst: /var/lib/rmmagent
+    type: dir
+    file_info:
+      mode: 0700
+      owner: root
+      group: root
+
+# Maintainer scripts are format-agnostic (they detect deb vs rpm at runtime)
+# and wired to both packagers below.
+scripts:
+  postinstall: ./scripts/postinstall.sh
+  preremove: ./scripts/preremove.sh
+  postremove: ./scripts/postremove.sh
+
+# GPG signing (plan: deb/rpm GPG-signed) is left out of this base config so
+# unsigned local/dev builds work without keys. To sign a release, run nfpm
+# with a signing overlay, e.g.:
+#   nfpm package -f nfpm.yaml --packager deb \
+#     | gpg ...           # or set deb.signature.key_file / rpm.signature.*
+# in a release-only config that merges over this one. See packaging/README.md.
