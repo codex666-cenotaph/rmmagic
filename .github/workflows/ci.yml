@@ -56,6 +56,20 @@ jobs:
           GOOS: ${{ matrix.goos }}
         run: go vet ./...
 
+  # Run the Windows-tagged unit tests on a real Windows runner so the
+  # registry/SCM helpers are exercised (build tags exclude them on Linux).
+  agent-windows-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: Test (windows/amd64)
+        working-directory: agent
+        run: go test ./internal/platform/...
+
   integration:
     runs-on: ubuntu-latest
     services:
