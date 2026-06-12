@@ -6,6 +6,7 @@ WORKDIR /build
 COPY go.work go.work.sum* ./
 COPY shared/ ./shared/
 COPY server/ ./server/
+COPY agent/ ./agent/
 
 RUN CGO_ENABLED=0 go build -o /app/rmmserver ./server/cmd/rmmserver
 
