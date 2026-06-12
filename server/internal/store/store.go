@@ -7,6 +7,9 @@ package store
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -20,18 +23,39 @@ type Store struct {
 // Open connects the pool. If appRole is non-empty every connection
 // switches to it after connecting, so the RLS policies (which target
 // rmm_app) are in force for all queries.
+//
+// Every connection gets statement/lock timeouts so a blocked query (e.g.
+// an interrupted migration holding an ACCESS EXCLUSIVE lock) fails fast
+// with a 500 instead of hanging requests and draining the pool.
 func Open(ctx context.Context, dsn, appRole string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
 	}
-	if appRole != "" {
-		role := pgx.Identifier{appRole}.Sanitize()
-		cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-			_, err := conn.Exec(ctx, "SET ROLE "+role)
-			return err
-		}
+	if cfg.MaxConns < 10 {
+		cfg.MaxConns = 10
 	}
+	if v := os.Getenv("RMM_DB_MAX_CONNS"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("invalid RMM_DB_MAX_CONNS %q", v)
+		}
+		cfg.MaxConns = int32(n)
+	}
+	cfg.MaxConnLifetime = time.Hour
+	cfg.MaxConnIdleTime = 30 * time.Minute
+
+	setup := "SET lock_timeout = '3s'; " +
+		"SET statement_timeout = '15s'; " +
+		"SET idle_in_transaction_session_timeout = '15s'"
+	if appRole != "" {
+		setup += "; SET ROLE " + pgx.Identifier{appRole}.Sanitize()
+	}
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, setup)
+		return err
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
