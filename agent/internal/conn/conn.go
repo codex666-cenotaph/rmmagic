@@ -299,6 +299,25 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 		a.Log.Info("skipping already-executed command", "command_id", req.CommandId)
 		return
 	}
+	// Expired commands must not start; report EXPIRED instead so the
+	// server closes out the job.
+	if req.ExpiresAt != nil && time.Now().After(req.ExpiresAt.AsTime()) {
+		a.Log.Warn("command expired before execution", "command_id", req.CommandId)
+		if a.Journal != nil {
+			_ = a.Journal.Record(req.CommandId)
+		}
+		_ = write(ctx, ws, &rmmpb.Envelope{
+			MessageId: uuid.NewString(),
+			Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
+				CommandId:  req.CommandId,
+				Status:     rmmpb.CommandStatus_COMMAND_STATUS_EXPIRED,
+				Output:     []byte("command expired before execution"),
+				StartedAt:  timestamppb.Now(),
+				FinishedAt: timestamppb.Now(),
+			}},
+		})
+		return
+	}
 	a.Log.Info("executing command", "command_id", req.CommandId, "kind", req.Kind)
 
 	var result agentexec.Result

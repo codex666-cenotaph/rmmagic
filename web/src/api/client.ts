@@ -4,11 +4,14 @@ const BASE = "/api/v1";
 
 export class ApiError extends Error {
   status: number;
+  // Structured error payload, e.g. the 409 blast-radius confirmation.
+  data: unknown;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, data?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -25,13 +28,15 @@ async function request<T>(
   });
   if (!res.ok) {
     let message = res.statusText || `Request failed (${res.status})`;
+    let data: unknown;
     try {
-      const data = (await res.json()) as { error?: string };
-      if (data && typeof data.error === "string") message = data.error;
+      data = await res.json();
+      const err = data as { error?: string };
+      if (err && typeof err.error === "string") message = err.error;
     } catch {
       // body wasn't JSON; keep default message
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, data);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -288,6 +293,179 @@ export const createEnrollmentToken = (body: {
 
 export const revokeEnrollmentToken = (id: string) =>
   request<void>("DELETE", `/enrollment-tokens/${id}`);
+
+// ---- Scripts, jobs, schedules ----
+
+export type ScriptLanguage = "bash" | "powershell" | "python" | "batch";
+
+export interface ScriptParameterDef {
+  name: string;
+  description?: string;
+  default?: string;
+  required?: boolean;
+}
+
+export interface Script {
+  id: string;
+  name: string;
+  description: string;
+  language: ScriptLanguage;
+  body: string;
+  parameters: ScriptParameterDef[];
+  version: number;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JobTarget {
+  device_ids?: string[];
+  site_id?: string;
+  customer_id?: string;
+}
+
+export type JobStatus =
+  | "pending"
+  | "sent"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "expired";
+
+export interface Job {
+  id: string;
+  script_id: string;
+  script_name: string;
+  device_id: string;
+  hostname: string;
+  command_id: string;
+  status: JobStatus;
+  timeout_s: number;
+  language: ScriptLanguage;
+  parameters: Record<string, string>;
+  schedule_id?: string;
+  created_at: string;
+  expires_at: string;
+  sent_at?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface Schedule {
+  id: string;
+  script_id: string;
+  script_name: string;
+  name: string;
+  cron: string;
+  target: JobTarget;
+  parameters: Record<string, string>;
+  timeout_s: number;
+  expires_in_s: number;
+  enabled: boolean;
+  next_run_at: string;
+  last_run_at: string | null;
+  created_at: string;
+}
+
+// Thrown payload of a 409 blast-radius response.
+export interface DispatchConfirmation {
+  confirmation_required: true;
+  device_count: number;
+  confirm_token: string;
+}
+
+export function confirmationFrom(err: unknown): DispatchConfirmation | null {
+  if (err instanceof ApiError && err.status === 409) {
+    const d = err.data as Partial<DispatchConfirmation> | undefined;
+    if (d?.confirmation_required && typeof d.confirm_token === "string") {
+      return d as DispatchConfirmation;
+    }
+  }
+  return null;
+}
+
+export const listScripts = (archived = false) =>
+  request<{ scripts: Script[] }>(
+    "GET",
+    `/scripts${archived ? "?archived=true" : ""}`,
+  );
+
+export const getScript = (id: string) => request<Script>("GET", `/scripts/${id}`);
+
+export const createScript = (body: {
+  name: string;
+  description: string;
+  language: ScriptLanguage;
+  body: string;
+  parameters: ScriptParameterDef[];
+}) => request<{ id: string }>("POST", "/scripts", body);
+
+export const updateScript = (
+  id: string,
+  body: {
+    name: string;
+    description: string;
+    language: ScriptLanguage;
+    body: string;
+    parameters: ScriptParameterDef[];
+  },
+) => request<unknown>("PATCH", `/scripts/${id}`, body);
+
+export const archiveScript = (id: string) =>
+  request<unknown>("DELETE", `/scripts/${id}`);
+
+export const dispatchScript = (
+  scriptId: string,
+  body: {
+    target: JobTarget;
+    parameters?: Record<string, string>;
+    timeout_s?: number;
+    expires_in_s?: number;
+    confirm_token?: string;
+  },
+) =>
+  request<{ job_ids: string[]; device_count: number }>(
+    "POST",
+    `/scripts/${scriptId}/dispatch`,
+    body,
+  );
+
+export const listJobs = (deviceId?: string) =>
+  request<{ jobs: Job[] }>(
+    "GET",
+    `/jobs${deviceId ? `?device_id=${deviceId}` : ""}`,
+  );
+
+export const getJobOutput = (id: string) =>
+  request<{ output: string; exit_code: number | null }>(
+    "GET",
+    `/jobs/${id}/output`,
+  );
+
+export const listSchedules = () =>
+  request<{ schedules: Schedule[] }>("GET", "/schedules");
+
+export interface ScheduleBody {
+  script_id: string;
+  name: string;
+  cron: string;
+  target: JobTarget;
+  parameters?: Record<string, string>;
+  timeout_s?: number;
+  expires_in_s?: number;
+  enabled?: boolean;
+  confirm_token?: string;
+}
+
+export const createSchedule = (body: ScheduleBody) =>
+  request<{ id: string; next_run_at: string }>("POST", "/schedules", body);
+
+export const updateSchedule = (id: string, body: ScheduleBody) =>
+  request<{ id: string; next_run_at: string }>("PUT", `/schedules/${id}`, body);
+
+export const deleteSchedule = (id: string) =>
+  request<void>("DELETE", `/schedules/${id}`);
 
 // ---- Audit ----
 

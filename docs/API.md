@@ -1,4 +1,4 @@
-# API v1 — M1 surface
+# API v1
 
 Base path `/api/v1`. All bodies JSON. Errors: `{"error": "message"}` with
 4xx/5xx status. Browser auth via `rmm_session` HttpOnly cookie; API
@@ -71,6 +71,67 @@ Requested permissions must be a subset of the caller's own.
 
 Install command to display with a new token:
 `rmmagent enroll --server https://<host> --token <token> && rmmagent run`
+
+## Scripts
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| GET /scripts?archived=true | scripts.read | `{scripts: [{id, name, description, language, body, parameters, version, archived, created_at, updated_at}]}` (default list excludes archived) |
+| POST /scripts | scripts.manage | `{name, description?, language: "bash"\|"powershell"\|"python"\|"batch", body, parameters?: [{name, description?, default?, required?}]}` → 201 `{id}` |
+| GET /scripts/{id} | scripts.read | one script object |
+| PATCH /scripts/{id} | scripts.manage | same body as POST → 200 (bumps `version`) |
+| DELETE /scripts/{id} | scripts.manage | 200 (archives; archived scripts cannot be dispatched) |
+| POST /scripts/{id}/dispatch | scripts.execute | see below |
+
+### Dispatch and the blast-radius safeguard
+
+`POST /scripts/{id}/dispatch` body:
+`{target, parameters?: {name: value}, timeout_s? (default 300), expires_in_s? (default 86400, max 604800), confirm_token?}`
+with `target` exactly one of `{device_ids: [uuid]}`, `{site_id}`,
+`{customer_id}` (legacy shorthand `{device_id}` still accepted). The
+target expands to its **active** devices at dispatch time; targeting
+devices outside the caller's scripts.execute scope fails the request.
+
+If the target resolves to more than the blast-radius threshold
+(default 25 devices), the response is **409**
+`{confirmation_required: true, device_count, confirm_token}`; repeat the
+identical request with `confirm_token` set to proceed. Tokens are bound
+to tenant + script + exact target + count and expire after 5 minutes.
+
+Success: 201 `{job_ids: [uuid], device_count}` (plus `job_id` when the
+target was a single device). One job per device; offline devices get the
+command when they reconnect, until `expires_at` passes.
+
+## Jobs
+
+| Method/Path | Permission | Response |
+|---|---|---|
+| GET /jobs?device_id= | scripts.read | `{jobs: [{id, script_id, script_name, device_id, hostname, command_id, status, timeout_s, language, parameters, schedule_id?, created_at, expires_at, sent_at?, started_at?, finished_at?}]}` newest first, scope-filtered |
+| GET /jobs/{id} | scripts.read | one job object |
+| GET /jobs/{id}/output | scripts.read | `{output, exit_code}` |
+
+Job statuses: `pending` (queued, device offline) → `sent` → terminal
+`succeeded`/`failed`/`timed_out`/`expired`. The worker sweeps queued
+jobs past `expires_at` to `expired`.
+
+## Schedules
+
+Cron-style recurring dispatch, evaluated in UTC by the worker role.
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| GET /schedules | scripts.read | `{schedules: [{id, script_id, script_name, name, cron, target, parameters, timeout_s, expires_in_s, enabled, next_run_at, last_run_at, created_at}]}` |
+| POST /schedules | scripts.execute | `{script_id, name, cron, target, parameters?, timeout_s?, expires_in_s?, enabled?, confirm_token?}` → 201 `{id, next_run_at}` |
+| GET /schedules/{id} | scripts.read | one schedule object |
+| PUT /schedules/{id} | scripts.execute | same body as POST → 200 |
+| DELETE /schedules/{id} | scripts.execute | 204 |
+
+`cron` is a 5-field expression or `@hourly`/`@daily`/`@weekly`/`@monthly`.
+Creating or updating a schedule applies the same blast-radius 409
+confirmation as dispatch, using the target's current resolution. Each
+firing creates one job per active device in the target and is audited as
+`schedule.run` (actor `system`). Missed firings (worker down) are not
+replayed; the next run is computed from the current time.
 
 ## Audit log
 

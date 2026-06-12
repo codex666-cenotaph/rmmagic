@@ -30,6 +30,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
 )
 
@@ -125,7 +126,7 @@ func runServe(log *slog.Logger) {
 			version.Version, version.Commit, version.ProtocolVersion)
 	})
 
-	if enabled["api"] || enabled["gateway"] {
+	if enabled["api"] || enabled["gateway"] || enabled["worker"] {
 		st := openStore(ctx, log, envOr("RMM_APP_ROLE", "rmm_app"))
 		defer st.Close()
 
@@ -146,6 +147,11 @@ func runServe(log *slog.Logger) {
 			mux.Handle("/api/v1/", srv.Handler())
 			mux.Handle("/agent/v1/enroll", srv.Handler())
 			mux.Handle("/agent/v1/stats", srv.Handler())
+		}
+		if enabled["worker"] {
+			// gw is nil when the gateway role runs elsewhere; schedule-fired
+			// jobs then reach agents via reconnect drain instead.
+			go worker.New(st, log, gw).Run(ctx)
 		}
 	}
 

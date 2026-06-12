@@ -186,6 +186,7 @@ func (g *Gateway) drainPendingJobs(ctx context.Context, ac *agentConn, tenantID,
 				CommandId: pj.CommandID,
 				Kind:      rmmpb.CommandKind_COMMAND_KIND_SCRIPT,
 				Spec:      spec,
+				ExpiresAt: timestamppb.New(pj.ExpiresAt),
 				TimeoutS:  uint32(pj.TimeoutS),
 			}},
 		}); err != nil {
@@ -265,7 +266,7 @@ func buildScriptSpec(language, body string, params json.RawMessage) ([]byte, err
 // DispatchJob sends a script job to a connected device. Returns true if
 // the device was online and the frame was sent.
 func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uuid.UUID, commandID string) bool {
-	spec, timeoutS, err := g.jobSpecForCommand(ctx, tenantID, commandID)
+	spec, timeoutS, expiresAt, err := g.jobSpecForCommand(ctx, tenantID, commandID)
 	if err != nil {
 		g.Log.Error("dispatch job spec failed", "job_id", jobID, "error", err)
 		return false
@@ -276,17 +277,19 @@ func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uui
 			CommandId: commandID,
 			Kind:      rmmpb.CommandKind_COMMAND_KIND_SCRIPT,
 			Spec:      spec,
+			ExpiresAt: timestamppb.New(expiresAt),
 			TimeoutS:  uint32(timeoutS),
 		}},
 	})
 }
 
-func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, commandID string) ([]byte, int, error) {
+func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, commandID string) ([]byte, int, time.Time, error) {
 	var spec []byte
 	var timeoutS int
+	var expiresAt time.Time
 	err := g.Store.WithTenant(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT language, script_body, parameters, timeout_s FROM jobs WHERE command_id=$1`, commandID)
+			`SELECT language, script_body, parameters, timeout_s, expires_at FROM jobs WHERE command_id=$1`, commandID)
 		if err != nil {
 			return err
 		}
@@ -296,13 +299,13 @@ func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, com
 		}
 		var lang, body string
 		var params json.RawMessage
-		if err := rows.Scan(&lang, &body, &params, &timeoutS); err != nil {
+		if err := rows.Scan(&lang, &body, &params, &timeoutS, &expiresAt); err != nil {
 			return err
 		}
 		spec, err = buildScriptSpec(lang, body, params)
 		return err
 	})
-	return spec, timeoutS, err
+	return spec, timeoutS, expiresAt, err
 }
 
 // touch updates last_seen_at, throttled so heartbeats don't write the

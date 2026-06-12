@@ -29,6 +29,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
 	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
 	rmmpb "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/rmm/v1"
 )
@@ -213,6 +214,7 @@ func TestAPIIntegration(t *testing.T) {
 
 	testDeviceFlow(t, ts.URL, alpha, beta, siteID)
 	testScriptsFlow(t, ts.URL, alpha, beta, siteID)
+	testTargetsAndSchedulesFlow(t, ts.URL, alpha, beta, siteID, srv, appStore, priv)
 }
 
 // testDeviceFlow exercises M2: enrollment, gateway auth, heartbeat,
@@ -586,6 +588,172 @@ func testScriptsFlow(t *testing.T, baseURL string, alpha, beta *client, siteID s
 	}
 	alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
 		obj{"device_id": deviceID, "timeout_s": 30}, 404)
+}
+
+// testTargetsAndSchedulesFlow exercises the M3 completion surface:
+// site/customer target selectors, the blast-radius confirmation flow,
+// queued-job expiry, and cron schedules fired by the worker.
+func testTargetsAndSchedulesFlow(t *testing.T, baseURL string, alpha, beta *client, siteID string,
+	srv *Server, appStore, priv *store.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	sc := alpha.post(t, "/api/v1/scripts", obj{
+		"name": "Targeted Script", "language": "bash", "body": "echo hi", "parameters": []any{},
+	}, 201)
+	scriptID := sc["id"].(string)
+
+	// Two more enrolled (offline) devices in the site; job-box from the
+	// scripts flow is still active, so the site now has 3 active devices.
+	enrollDevice := func(hostname string) string {
+		tok := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 201)
+		pub, _, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := newClient(t, baseURL).post(t, "/agent/v1/enroll", obj{
+			"token": tok["token"].(string), "hostname": hostname, "os": "linux", "arch": "amd64",
+			"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+		}, 201)
+		return resp["device_id"].(string)
+	}
+	enrollDevice("target-box-1")
+	enrollDevice("target-box-2")
+
+	// --- blast radius: site-wide dispatch above the threshold needs a
+	// confirmation token that encodes the resolved device count ---
+	srv.BlastRadius = 1
+	conflict := alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"target": obj{"site_id": siteID}}, 409)
+	if conflict["confirmation_required"] != true {
+		t.Fatalf("expected confirmation_required, got %v", conflict)
+	}
+	count := int(conflict["device_count"].(float64))
+	if count != 3 {
+		t.Fatalf("expected device_count 3, got %d", count)
+	}
+	// A garbage token is rejected (still 409).
+	alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"target": obj{"site_id": siteID}, "confirm_token": "bogus"}, 409)
+	// The issued token authorizes exactly this dispatch.
+	created := alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"target": obj{"site_id": siteID}, "confirm_token": conflict["confirm_token"]}, 201)
+	if n := len(created["job_ids"].([]any)); n != 3 {
+		t.Fatalf("expected 3 jobs from site dispatch, got %d", n)
+	}
+	srv.BlastRadius = 25
+
+	// Cross-tenant: beta dispatching against alpha's site resolves to
+	// nothing under RLS.
+	betaScript := beta.post(t, "/api/v1/scripts", obj{
+		"name": "Beta Script", "language": "bash", "body": "echo beta", "parameters": []any{},
+	}, 201)
+	beta.post(t, "/api/v1/scripts/"+betaScript["id"].(string)+"/dispatch",
+		obj{"target": obj{"site_id": siteID}}, 400)
+
+	// --- expiry: a queued job past its window is swept to 'expired' and
+	// never (re-)delivered ---
+	expiring := alpha.post(t, "/api/v1/scripts/"+scriptID+"/dispatch",
+		obj{"target": obj{"site_id": siteID}, "expires_in_s": 1}, 201)
+	expiringID := expiring["job_ids"].([]any)[0].(string)
+	time.Sleep(1100 * time.Millisecond)
+
+	wk := worker.New(appStore, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	wk.Tick(ctx)
+
+	if got := alpha.get(t, "/api/v1/jobs/"+expiringID, 200)["status"]; got != "expired" {
+		t.Fatalf("queued job past expiry should be expired, got %v", got)
+	}
+
+	// --- schedules ---
+	alpha.post(t, "/api/v1/schedules", obj{
+		"script_id": scriptID, "name": "bad cron", "cron": "not a cron",
+		"target": obj{"site_id": siteID},
+	}, 400)
+
+	schedule := alpha.post(t, "/api/v1/schedules", obj{
+		"script_id": scriptID, "name": "nightly", "cron": "0 3 * * *",
+		"target": obj{"site_id": siteID}, "parameters": obj{}, "timeout_s": 60,
+	}, 201)
+	scheduleID := schedule["id"].(string)
+
+	// Schedule creation above the blast radius needs the same ack.
+	srv.BlastRadius = 1
+	schedConflict := alpha.post(t, "/api/v1/schedules", obj{
+		"script_id": scriptID, "name": "big nightly", "cron": "@daily",
+		"target": obj{"site_id": siteID},
+	}, 409)
+	confirmed := alpha.post(t, "/api/v1/schedules", obj{
+		"script_id": scriptID, "name": "big nightly", "cron": "@daily",
+		"target": obj{"site_id": siteID}, "confirm_token": schedConflict["confirm_token"],
+	}, 201)
+	srv.BlastRadius = 25
+	alpha.req(t, "DELETE", "/api/v1/schedules/"+confirmed["id"].(string), nil, 204)
+
+	// Cross-tenant: beta cannot see or modify alpha's schedule.
+	if n := len(beta.get(t, "/api/v1/schedules", 200)["schedules"].([]any)); n != 0 {
+		t.Fatalf("beta must see 0 schedules, got %d", n)
+	}
+	beta.get(t, "/api/v1/schedules/"+scheduleID, 404)
+	beta.req(t, "DELETE", "/api/v1/schedules/"+scheduleID, nil, 404)
+
+	// --- worker fires a due schedule exactly once ---
+	// Backdate next_run_at on a privileged connection (tests only).
+	err := priv.System(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			"UPDATE schedules SET next_run_at = now() - interval '1 minute' WHERE id = $1", scheduleID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wk.Tick(ctx)
+
+	jobs := alpha.get(t, "/api/v1/jobs?limit=200", 200)["jobs"].([]any)
+	fired := 0
+	for _, j := range jobs {
+		if j.(map[string]any)["schedule_id"] == scheduleID {
+			fired++
+		}
+	}
+	if fired != 3 {
+		t.Fatalf("schedule should have fired 1 job per active site device (3), got %d", fired)
+	}
+
+	// next_run_at advanced past now, so a second tick must not re-fire.
+	detail := alpha.get(t, "/api/v1/schedules/"+scheduleID, 200)
+	next, err := time.Parse(time.RFC3339, detail["next_run_at"].(string))
+	if err != nil || !next.After(time.Now()) {
+		t.Fatalf("next_run_at not advanced: %v (%v)", detail["next_run_at"], err)
+	}
+	if detail["last_run_at"] == nil {
+		t.Fatal("last_run_at not recorded")
+	}
+	wk.Tick(ctx)
+	jobs = alpha.get(t, "/api/v1/jobs?limit=200", 200)["jobs"].([]any)
+	refired := 0
+	for _, j := range jobs {
+		if j.(map[string]any)["schedule_id"] == scheduleID {
+			refired++
+		}
+	}
+	if refired != fired {
+		t.Fatalf("second tick re-fired the schedule: %d -> %d jobs", fired, refired)
+	}
+
+	// The firing is audited as a system action.
+	foundAudit := false
+	for _, e := range alpha.get(t, "/api/v1/audit?limit=200", 200)["entries"].([]any) {
+		entry := e.(map[string]any)
+		if entry["action"] == "schedule.run" && entry["actor_type"] == "system" {
+			foundAudit = true
+		}
+	}
+	if !foundAudit {
+		t.Error("schedule.run audit entry missing")
+	}
+
+	alpha.req(t, "DELETE", "/api/v1/schedules/"+scheduleID, nil, 204)
 }
 
 func readEnvelope(ctx context.Context, ws *websocket.Conn) (*rmmpb.Envelope, error) {

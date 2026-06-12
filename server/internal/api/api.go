@@ -32,6 +32,9 @@ type Server struct {
 	CookieSecure bool
 	SessionTTL   time.Duration
 	TOTPIssuer   string
+	// BlastRadius is the device count above which dispatches and
+	// schedules require a confirmation token (mass-action safeguard).
+	BlastRadius int
 	// Gateway, when set, is notified to kick live agent connections on
 	// decommission.
 	Gateway *gateway.Gateway
@@ -47,6 +50,7 @@ func NewServer(st *store.Store, box *secrets.Box, log *slog.Logger, cookieSecure
 		CookieSecure: cookieSecure,
 		SessionTTL:   12 * time.Hour,
 		TOTPIssuer:   "rmmagic",
+		BlastRadius:  defaultBlastRadius,
 		loginLimiter: newRateLimiter(10, time.Minute),
 	}
 }
@@ -113,6 +117,12 @@ func (s *Server) Routes() []Route {
 		{Method: "GET", Pattern: "/api/v1/jobs", Perm: auth.PermScriptsRead, Handler: s.handleListJobs},
 		{Method: "GET", Pattern: "/api/v1/jobs/{id}", Perm: auth.PermScriptsRead, Handler: s.handleGetJob},
 		{Method: "GET", Pattern: "/api/v1/jobs/{id}/output", Perm: auth.PermScriptsRead, Handler: s.handleGetJobOutput},
+
+		{Method: "GET", Pattern: "/api/v1/schedules", Perm: auth.PermScriptsRead, Handler: s.handleListSchedules},
+		{Method: "POST", Pattern: "/api/v1/schedules", Perm: auth.PermScriptsExecute, Handler: s.handleCreateSchedule},
+		{Method: "GET", Pattern: "/api/v1/schedules/{id}", Perm: auth.PermScriptsRead, Handler: s.handleGetSchedule},
+		{Method: "PUT", Pattern: "/api/v1/schedules/{id}", Perm: auth.PermScriptsExecute, Handler: s.handleUpdateSchedule},
+		{Method: "DELETE", Pattern: "/api/v1/schedules/{id}", Perm: auth.PermScriptsExecute, Handler: s.handleDeleteSchedule},
 
 		// Agent-facing: no user session; each handler authenticates the
 		// device itself (enrollment token / Ed25519 request signature).

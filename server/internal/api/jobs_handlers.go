@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -23,7 +25,9 @@ type jobJSON struct {
 	TimeoutS   int             `json:"timeout_s"`
 	Language   string          `json:"language"`
 	Parameters json.RawMessage `json:"parameters"`
+	ScheduleID *uuid.UUID      `json:"schedule_id,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
+	ExpiresAt  time.Time       `json:"expires_at"`
 	SentAt     *time.Time      `json:"sent_at,omitempty"`
 	StartedAt  *time.Time      `json:"started_at,omitempty"`
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
@@ -39,7 +43,8 @@ func toJobJSON(j store.Job) jobJSON {
 		DeviceID: j.DeviceID, Hostname: j.Hostname,
 		CommandID: j.CommandID, Status: j.Status,
 		TimeoutS: j.TimeoutS, Language: j.Language, Parameters: params,
-		CreatedAt: j.CreatedAt, SentAt: j.SentAt,
+		ScheduleID: j.ScheduleID,
+		CreatedAt:  j.CreatedAt, ExpiresAt: j.ExpiresAt, SentAt: j.SentAt,
 		StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
 	}
 }
@@ -153,9 +158,19 @@ func (s *Server) handleGetJobOutput(w http.ResponseWriter, r *http.Request) {
 }
 
 type dispatchReq struct {
-	DeviceID   uuid.UUID       `json:"device_id"`
-	Parameters json.RawMessage `json:"parameters"`
-	TimeoutS   int             `json:"timeout_s"`
+	// DeviceID is the single-device shorthand for Target.
+	DeviceID     uuid.UUID       `json:"device_id"`
+	Target       store.JobTarget `json:"target"`
+	Parameters   json.RawMessage `json:"parameters"`
+	TimeoutS     int             `json:"timeout_s"`
+	ExpiresInS   int             `json:"expires_in_s"`
+	ConfirmToken string          `json:"confirm_token"`
+}
+
+type createdJob struct {
+	JobID     uuid.UUID
+	DeviceID  uuid.UUID
+	CommandID string
 }
 
 func (s *Server) handleDispatchJob(w http.ResponseWriter, r *http.Request) {
@@ -170,20 +185,34 @@ func (s *Server) handleDispatchJob(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.DeviceID == uuid.Nil {
-		writeError(w, http.StatusBadRequest, "device_id is required")
+	if req.DeviceID != uuid.Nil {
+		req.Target = store.JobTarget{DeviceIDs: []uuid.UUID{req.DeviceID}}
+	}
+	if err := req.Target.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.TimeoutS <= 0 {
 		req.TimeoutS = 300
 	}
+	if req.TimeoutS > 86400 {
+		writeError(w, http.StatusBadRequest, "timeout_s must be at most 86400")
+		return
+	}
+	if req.ExpiresInS <= 0 {
+		req.ExpiresInS = 86400
+	}
+	if req.ExpiresInS > 7*86400 {
+		writeError(w, http.StatusBadRequest, "expires_in_s must be at most 604800")
+		return
+	}
 	if req.Parameters == nil {
 		req.Parameters = json.RawMessage("{}")
 	}
+	expiresAt := time.Now().Add(time.Duration(req.ExpiresInS) * time.Second)
 
-	var jobID uuid.UUID
-	var commandID string
-	var deviceID uuid.UUID
+	var jobs []createdJob
+	confirmed := true
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
 		sc, err := store.GetScript(ctx, tx, scriptID)
 		if err != nil {
@@ -192,36 +221,72 @@ func (s *Server) handleDispatchJob(w http.ResponseWriter, r *http.Request) {
 		if sc.ArchivedAt != nil {
 			return store.ErrNotFound
 		}
-		dev, err := getAuthorizedDevice(r, tx, auth.PermScriptsExecute, req.DeviceID)
+		devices, err := resolveAuthorizedTarget(ctx, tx, req.Target)
 		if err != nil {
 			return err
 		}
-		if dev.Status != "active" {
-			return store.ErrNotFound
+		if len(devices) == 0 {
+			return errNoTargetDevices
 		}
-		deviceID = dev.ID
-		jobID, commandID, err = store.CreateJob(ctx, tx,
-			p.TenantID, scriptID, deviceID, p.UserID,
-			req.TimeoutS, req.Parameters, sc.Body, sc.Language)
-		if err != nil {
-			return err
+		if !s.requireBlastRadiusAck(w, p.TenantID, scriptID, req.Target, len(devices), req.ConfirmToken) {
+			confirmed = false
+			return nil // response already written; roll back nothing
 		}
-		return recordAudit(ctx, tx, "job.dispatch", "job", jobID,
-			map[string]any{"script_id": scriptID, "device_id": deviceID})
+		for _, dev := range devices {
+			jobID, commandID, err := store.CreateJob(ctx, tx,
+				p.TenantID, scriptID, dev.ID, &p.UserID, nil,
+				req.TimeoutS, expiresAt, req.Parameters, sc.Body, sc.Language)
+			if err != nil {
+				return err
+			}
+			jobs = append(jobs, createdJob{JobID: jobID, DeviceID: dev.ID, CommandID: commandID})
+		}
+		return recordAudit(ctx, tx, "job.dispatch", "script", scriptID,
+			map[string]any{"target": req.Target, "device_count": len(devices)})
 	})
+	if errors.Is(err, errNoTargetDevices) {
+		writeError(w, http.StatusBadRequest, errNoTargetDevices.Error())
+		return
+	}
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
+	if !confirmed {
+		return
+	}
 
-	// Attempt immediate delivery if the device has an open connection.
-	if s.Gateway != nil {
-		if sent := s.Gateway.DispatchJob(ctx, p.TenantID, deviceID, jobID, commandID); sent {
-			_ = s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
-				return store.MarkJobSent(ctx, tx, jobID)
+	s.deliverJobs(ctx, p.TenantID, jobs)
+
+	resp := map[string]any{
+		"job_ids":      jobIDs(jobs),
+		"device_count": len(jobs),
+	}
+	if len(jobs) == 1 {
+		resp["job_id"] = jobs[0].JobID
+	}
+	writeJSON(w, http.StatusCreated, resp)
+}
+
+func jobIDs(jobs []createdJob) []uuid.UUID {
+	ids := make([]uuid.UUID, len(jobs))
+	for i, j := range jobs {
+		ids[i] = j.JobID
+	}
+	return ids
+}
+
+// deliverJobs attempts immediate delivery to devices with an open
+// gateway connection; offline devices get theirs on reconnect drain.
+func (s *Server) deliverJobs(ctx context.Context, tenantID uuid.UUID, jobs []createdJob) {
+	if s.Gateway == nil {
+		return
+	}
+	for _, j := range jobs {
+		if sent := s.Gateway.DispatchJob(ctx, tenantID, j.DeviceID, j.JobID, j.CommandID); sent {
+			_ = s.Store.WithTenant(ctx, tenantID, func(tx pgx.Tx) error {
+				return store.MarkJobSent(ctx, tx, j.JobID)
 			})
 		}
 	}
-
-	writeJSON(w, http.StatusCreated, map[string]any{"job_id": jobID})
 }

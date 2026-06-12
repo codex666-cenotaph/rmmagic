@@ -5,7 +5,10 @@ import { useAuth } from "./auth";
 
 const NAV = [
   { to: "/devices", label: "Devices" },
-  { to: "/enroll", label: "Enrollment" },
+  { to: "/scripts", label: "Scripts", perm: "scripts.read" },
+  { to: "/jobs", label: "Jobs", perm: "scripts.read" },
+  { to: "/schedules", label: "Schedules", perm: "scripts.read" },
+  { to: "/enroll", label: "Enrollment", perm: "devices.enroll" },
   { to: "/customers", label: "Customers" },
   { to: "/users", label: "Users" },
   { to: "/tokens", label: "API Tokens" },
@@ -32,9 +35,7 @@ export function AppShell() {
       <aside className="sidebar">
         <div className="brand">rmmagic</div>
         <nav>
-          {NAV.filter(
-            (item) => item.to !== "/enroll" || can("devices.enroll"),
-          ).map((item) => (
+          {NAV.filter((item) => !item.perm || can(item.perm)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
