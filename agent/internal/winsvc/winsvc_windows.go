@@ -8,8 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
@@ -92,8 +92,10 @@ func Install(exePath, stateDir string) error {
 		return fmt.Errorf("service %q is already installed (run uninstall-service first)", ServiceName)
 	}
 
-	imagePath := quoteArg(exePath) + " run --state-dir " + quoteArg(stateDir)
-	s, err := m.CreateService(ServiceName, imagePath, mgr.Config{
+	// Pass only the bare exe path so mgr quotes it cleanly as "exe".
+	// Passing a pre-quoted or arg-containing string causes mgr to double-quote,
+	// producing an ImagePath the SCM cannot parse.
+	s, err := m.CreateService(ServiceName, exePath, mgr.Config{
 		StartType:   mgr.StartAutomatic,
 		DisplayName: serviceDisplayName,
 		Description: serviceDescription,
@@ -102,6 +104,20 @@ func Install(exePath, stateDir string) error {
 		return fmt.Errorf("install-service: create service: %w", err)
 	}
 	s.Close()
+
+	// mgr.CreateService stores only the exe path; patch ImagePath directly in
+	// the registry to append the subcommand and state-dir argument.
+	imagePath := `"` + exePath + `" run --state-dir "` + stateDir + `"`
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE,
+		`SYSTEM\CurrentControlSet\Services\`+ServiceName,
+		registry.SET_VALUE)
+	if err != nil {
+		return fmt.Errorf("install-service: open service registry key: %w", err)
+	}
+	defer key.Close()
+	if err := key.SetStringValue("ImagePath", imagePath); err != nil {
+		return fmt.Errorf("install-service: patch ImagePath: %w", err)
+	}
 	return nil
 }
 
@@ -125,10 +141,3 @@ func Uninstall() error {
 	return s.Delete()
 }
 
-// quoteArg wraps arg in double quotes if it contains whitespace.
-func quoteArg(arg string) string {
-	if strings.ContainsAny(arg, " \t") {
-		return `"` + arg + `"`
-	}
-	return arg
-}
