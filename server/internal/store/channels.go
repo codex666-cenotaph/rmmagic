@@ -64,6 +64,36 @@ func CreateChannel(ctx context.Context, tx pgx.Tx, tenantID, id uuid.UUID,
 	return err
 }
 
+func UpdateChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID,
+	name, chType string, config json.RawMessage, secretEnc []byte) error {
+	if len(secretEnc) > 0 {
+		tag, err := tx.Exec(ctx, `
+			UPDATE notification_channels
+			SET name=$2, type=$3, config=$4, secret_enc=$5
+			WHERE id=$1`,
+			id, name, chType, config, secretEnc)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+	} else {
+		tag, err := tx.Exec(ctx, `
+			UPDATE notification_channels
+			SET name=$2, type=$3, config=$4
+			WHERE id=$1`,
+			id, name, chType, config)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
 func DeleteChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	tag, err := tx.Exec(ctx, `DELETE FROM notification_channels WHERE id = $1`, id)
 	if err != nil {

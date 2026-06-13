@@ -667,6 +667,9 @@ export const listChannels = () =>
 export const createChannel = (body: ChannelBody) =>
   request<{ id: string }>("POST", "/channels", body);
 
+export const updateChannel = (id: string, body: ChannelBody) =>
+  request<void>("PUT", `/channels/${id}`, body);
+
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
 

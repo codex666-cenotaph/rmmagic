@@ -102,6 +102,82 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
+func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p, _ := auth.PrincipalFrom(ctx)
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Name   string          `json:"name"`
+		Type   string          `json:"type"`
+		Config json.RawMessage `json:"config"`
+		Secret string          `json:"secret"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Name == "" || len(req.Name) > 120 {
+		writeError(w, http.StatusBadRequest, "name required (max 120 chars)")
+		return
+	}
+	if req.Type != "email" && req.Type != "webhook" {
+		writeError(w, http.StatusBadRequest, "type must be email or webhook")
+		return
+	}
+	if len(req.Config) == 0 {
+		req.Config = json.RawMessage("{}")
+	}
+
+	// Validate config shape.
+	switch req.Type {
+	case "email":
+		var cfg struct {
+			Recipients []string `json:"recipients"`
+		}
+		if err := json.Unmarshal(req.Config, &cfg); err != nil || len(cfg.Recipients) == 0 {
+			writeError(w, http.StatusBadRequest, "email config requires at least one recipient")
+			return
+		}
+	case "webhook":
+		var cfg struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(req.Config, &cfg); err != nil || cfg.URL == "" {
+			writeError(w, http.StatusBadRequest, "webhook config requires url")
+			return
+		}
+		if req.Secret != "" && (len(req.Secret) < 16 || len(req.Secret) > 200) {
+			writeError(w, http.StatusBadRequest, "webhook signing secret must be 16-200 chars (or empty to keep current)")
+			return
+		}
+	}
+
+	var secretEnc []byte
+	if req.Type == "webhook" && req.Secret != "" {
+		var err error
+		secretEnc, err = s.Box.Seal([]byte(req.Secret), id[:])
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+
+	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
+		if err := store.UpdateChannel(ctx, tx, id, req.Name, req.Type, req.Config, secretEnc); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "channel.update", "channel", id,
+			map[string]any{"name": req.Name, "type": req.Type})
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	p, _ := auth.PrincipalFrom(ctx)
