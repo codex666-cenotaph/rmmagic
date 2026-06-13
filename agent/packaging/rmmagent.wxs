@@ -9,7 +9,7 @@
   manual trigger — the device must be enrolled before the service will run
   successfully). Enrollment is done separately:
 
-    rmmagent.exe enroll --server https://rmm.example.com --token rmme_...
+    rmmagent.exe enroll -server https://rmm.example.com -token rmme_...
 
   After enrollment the service can be started immediately:
 
