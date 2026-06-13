@@ -17,6 +17,7 @@
 #     --branch NAME     branch to sync to        (default: current branch)
 #     --env-file PATH   env file to source       (default: deploy/rmmagic.env)
 #     --allow-dirty     stash local changes instead of aborting
+#     --build           build images from source instead of pulling from registry
 #     --no-sync         skip the git resync
 #     --no-restart      skip docker compose up
 #     -h, --help        show this help
@@ -31,6 +32,7 @@ BRANCH=""
 ENV_FILE="${ENV_FILE:-deploy/rmmagic.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 ALLOW_DIRTY=0
+DO_BUILD=0
 DO_SYNC=1
 DO_RESTART=1
 
@@ -40,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --branch)      BRANCH="$2"; shift 2 ;;
     --env-file)    ENV_FILE="$2"; shift 2 ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --build)       DO_BUILD=1; shift ;;
     --no-sync)     DO_SYNC=0; shift ;;
     --no-restart)  DO_RESTART=0; shift ;;
     -h|--help)     sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -85,9 +88,14 @@ if [[ "$DO_SYNC" == 1 ]]; then
   log "Now at $(git rev-parse --short HEAD) — $(git log -1 --pretty=%s)"
 fi
 
-# --- 2. pull images --------------------------------------------------------
-log "Pulling updated images (tag: ${IMAGE_TAG:-latest})"
-docker compose -f "$COMPOSE_FILE" pull
+# --- 2. pull or build images -----------------------------------------------
+if [[ "$DO_BUILD" == 1 ]]; then
+  log "Building images from source"
+  docker compose -f "$COMPOSE_FILE" -f docker-compose.build.yml build --pull
+else
+  log "Pulling updated images (tag: ${IMAGE_TAG:-latest})"
+  docker compose -f "$COMPOSE_FILE" pull
+fi
 
 # --- 3. restart ------------------------------------------------------------
 if [[ "$DO_RESTART" == 1 ]]; then
