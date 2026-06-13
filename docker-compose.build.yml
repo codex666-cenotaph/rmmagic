@@ -1,0 +1,13 @@
+# Override file to build images from source instead of pulling from GHCR.
+# Usage: docker compose -f docker-compose.prod.yml -f docker-compose.build.yml build --pull
+# deploy.sh --build uses this automatically.
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
