@@ -10,6 +10,9 @@ import "context"
 // DefaultStateDir is where the device identity and command journal live.
 func DefaultStateDir() string { return "/var/lib/rmmagent" }
 
+// HardenStateDir is a no-op on this OS.
+func HardenStateDir(_ string) error { return nil }
+
 // CollectPackages has no implementation on this OS; empty slice keeps
 // reporting uniform.
 func CollectPackages(ctx context.Context) ([]Package, error) {
