@@ -36,6 +36,11 @@ export function DashboardPage() {
     refetchInterval: 60_000,
     enabled: canScripts,
   });
+  const customersQ = useQuery({
+    queryKey: ["customers"],
+    queryFn: api.listCustomers,
+    refetchInterval: 60_000,
+  });
 
   const devices = useMemo(
     () => devicesQ.data?.devices ?? [],
@@ -48,6 +53,14 @@ export function DashboardPage() {
 
   // Devices by OS (active only).
   const byOS = useMemo(() => groupCount(active.map((d) => d.os || "unknown")), [active]);
+
+  // Devices per customer (active only).
+  const byCustomer = useMemo(
+    () => groupCount(active.map((d) => d.customer_name || "unknown")),
+    [active],
+  );
+
+  const customers = customersQ.data?.customers ?? [];
 
   // Agent version distribution → "updates" widget.
   const versions = useMemo(() => {
@@ -149,6 +162,16 @@ export function DashboardPage() {
           }
           tone={outdated > 0 ? "warn" : "ok"}
         />
+        <StatCard
+          label="Customers"
+          value={`${customers.length}`}
+          sub={
+            canDevices
+              ? `${byCustomer.length} with devices`
+              : `${customers.length} total`
+          }
+          tone="default"
+        />
       </div>
 
       <div className="dash-grid">
@@ -175,6 +198,25 @@ export function DashboardPage() {
             <h2>Devices by OS</h2>
             <BarRows
               items={byOS.map((g, i) => ({
+                label: g.label,
+                value: g.value,
+                color: CHART.series[i % CHART.series.length],
+              }))}
+              emptyText="No devices enrolled yet."
+            />
+          </section>
+        )}
+
+        {canDevices && (
+          <section className="panel">
+            <div className="panel-head">
+              <h2>Devices per customer</h2>
+              <Link to="/customers" className="panel-link">
+                View all
+              </Link>
+            </div>
+            <BarRows
+              items={byCustomer.map((g, i) => ({
                 label: g.label,
                 value: g.value,
                 color: CHART.series[i % CHART.series.length],
