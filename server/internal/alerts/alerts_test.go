@@ -42,6 +42,32 @@ func TestMergeNearestScopeWinsPerRuleType(t *testing.T) {
 	}
 }
 
+func TestMergeTagScopeBetweenSiteAndDevice(t *testing.T) {
+	sitePolicy := ScopedPolicy{
+		ID: uuid.New(), ScopeRank: ScopeRank("site"),
+		Rules: Rules{Offline: &OfflineRule{AfterS: 600}},
+	}
+	tagPolicy := ScopedPolicy{
+		ID: uuid.New(), ScopeRank: ScopeRank("tag"),
+		Rules: Rules{Offline: &OfflineRule{AfterS: 300}},
+	}
+	devicePolicy := ScopedPolicy{
+		ID: uuid.New(), ScopeRank: ScopeRank("device"),
+		Rules: Rules{Offline: &OfflineRule{AfterS: 120}},
+	}
+
+	// A tag policy overrides a site policy...
+	eff := Merge([]ScopedPolicy{sitePolicy, tagPolicy})
+	if eff.Offline == nil || eff.Offline.PolicyID != tagPolicy.ID {
+		t.Fatalf("tag scope should win over site, got %+v", eff.Offline)
+	}
+	// ...but a device-specific policy still wins over a tag policy.
+	eff = Merge([]ScopedPolicy{devicePolicy, tagPolicy, sitePolicy})
+	if eff.Offline == nil || eff.Offline.PolicyID != devicePolicy.ID {
+		t.Fatalf("device scope should win over tag, got %+v", eff.Offline)
+	}
+}
+
 func TestMergeSameRankLastWins(t *testing.T) {
 	older := ScopedPolicy{ID: uuid.New(), ScopeRank: 2, Rules: Rules{CPUPct: &ThresholdRule{Threshold: 95}}}
 	newer := ScopedPolicy{ID: uuid.New(), ScopeRank: 2, Rules: Rules{CPUPct: &ThresholdRule{Threshold: 70}}}

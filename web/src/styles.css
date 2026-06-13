@@ -460,6 +460,41 @@ table.data-table tbody tr:hover {
   border-color: transparent;
 }
 
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.tag-row.inline {
+  display: inline-flex;
+  margin: 0 0 0 8px;
+}
+
+.tag-remove {
+  background: none;
+  border: none;
+  padding: 0 0 0 4px;
+  margin: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.tag-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 340px;
+}
+
+.tag-add input {
+  flex: 1;
+}
+
 .secret-box {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--surface-2);

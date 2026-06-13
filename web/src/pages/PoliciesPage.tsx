@@ -184,7 +184,11 @@ function PolicyCard({
         <strong>{policy.name}</strong>
         <span className="muted">
           {policy.scope_type}
-          {policy.scope_id ? ` (${policy.scope_id})` : ""}
+          {policy.scope_type === "tag" && policy.scope_tag
+            ? ` (${policy.scope_tag})`
+            : policy.scope_id
+              ? ` (${policy.scope_id})`
+              : ""}
         </span>
         <span className={policy.enabled ? "badge badge-ok" : "badge"}>
           {policy.enabled ? "enabled" : "disabled"}
@@ -228,6 +232,7 @@ function PolicyForm({
   const [scopeCustomerId, setScopeCustomerId] = useState("");
   const [scopeSiteId, setScopeSiteId] = useState("");
   const [scopeDeviceId, setScopeDeviceId] = useState("");
+  const [scopeTag, setScopeTag] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [cpuEnabled, setCpuEnabled] = useState(false);
   const [cpuThreshold, setCpuThreshold] = useState("80");
@@ -282,8 +287,13 @@ function PolicyForm({
   function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setErr("");
+    const tag = scopeTag.trim().toLowerCase();
+    if (scopeType === "tag" && !tag) {
+      setErr("Enter a tag (e.g. server) for this policy");
+      return;
+    }
     const id = scopeID();
-    if (scopeType !== "tenant" && !id) {
+    if (scopeType !== "tenant" && scopeType !== "tag" && !id) {
       setErr(`Select a ${scopeType} for this policy`);
       return;
     }
@@ -295,7 +305,8 @@ function PolicyForm({
     mut.mutate({
       name,
       scope_type: scopeType,
-      scope_id: scopeType === "tenant" ? undefined : id,
+      scope_id: scopeType === "tenant" || scopeType === "tag" ? undefined : id,
+      scope_tag: scopeType === "tag" ? tag : undefined,
       enabled,
       rules,
       channel_ids: channelIDs,
@@ -318,14 +329,32 @@ function PolicyForm({
             setScopeCustomerId("");
             setScopeSiteId("");
             setScopeDeviceId("");
+            setScopeTag("");
           }}
         >
           <option value="tenant">Tenant (all devices)</option>
           <option value="customer">Customer</option>
           <option value="site">Site</option>
+          <option value="tag">Tag (e.g. servers)</option>
           <option value="device">Device</option>
         </select>
       </label>
+
+      {scopeType === "tag" && (
+        <label>
+          Tag
+          <input
+            value={scopeTag}
+            onChange={(e) => setScopeTag(e.target.value)}
+            placeholder="server"
+            required
+          />
+          <span className="muted">
+            Applies to every device carrying this tag. Pair with an
+            “Offline after” rule so tagged servers alert when they drop off.
+          </span>
+        </label>
+      )}
 
       {(scopeType === "customer" || scopeType === "site") && (
         <label>
