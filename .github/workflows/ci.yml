@@ -74,7 +74,7 @@ jobs:
           New-Item -ItemType Directory -Force packaging/dist | Out-Null
           go build -ldflags="-s -w" -o packaging/dist/rmmagent-windows-amd64.exe ./cmd/rmmagent
       - name: Install WiX Toolset v4
-        run: dotnet tool install --global wix
+        run: dotnet tool install --global wix --version "4.*"
       - name: Add WiX to PATH
         run: echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build MSI
