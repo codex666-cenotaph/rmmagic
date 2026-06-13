@@ -11,12 +11,12 @@ import (
 )
 
 type NotificationChannel struct {
-	ID        uuid.UUID
-	Name      string
-	Type      string // email|webhook
-	Config    json.RawMessage
-	SecretEnc []byte // webhook signing secret, sealed; nil for email
-	CreatedAt time.Time
+	ID        uuid.UUID       `json:"id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"` // email|webhook
+	Config    json.RawMessage `json:"config"`
+	SecretEnc []byte          `json:"-"` // sealed webhook secret; never sent to clients
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 func ListChannels(ctx context.Context, tx pgx.Tx) ([]NotificationChannel, error) {

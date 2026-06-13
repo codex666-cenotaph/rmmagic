@@ -155,7 +155,9 @@ function PolicyCard({
   canManage: boolean;
   onDelete: () => void;
 }) {
-  const rules = policy.rules;
+  // Guard against a policy row with missing/empty rules so one bad
+  // record can't take down the whole page.
+  const rules = policy.rules ?? {};
   const ruleLines: string[] = [];
   if (rules.cpu_pct)
     ruleLines.push(`CPU ≥ ${rules.cpu_pct.threshold}% (${rules.cpu_pct.severity ?? "warning"})`);

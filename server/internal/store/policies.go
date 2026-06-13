@@ -11,16 +11,16 @@ import (
 )
 
 type Policy struct {
-	ID         uuid.UUID      `json:"id"`
-	Name       string         `json:"name"`
-	ScopeType  string         `json:"scope_type"`
-	ScopeID    *uuid.UUID     `json:"scope_id"`
-	ScopeTag   *string        `json:"scope_tag"`
-	Enabled    bool           `json:"enabled"`
+	ID         uuid.UUID       `json:"id"`
+	Name       string          `json:"name"`
+	ScopeType  string          `json:"scope_type"`
+	ScopeID    *uuid.UUID      `json:"scope_id"`
+	ScopeTag   *string         `json:"scope_tag"`
+	Enabled    bool            `json:"enabled"`
 	Rules      json.RawMessage `json:"rules"`
-	ChannelIDs []uuid.UUID    `json:"channel_ids"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
+	ChannelIDs []uuid.UUID     `json:"channel_ids"`
+	CreatedAt  time.Time       `json:"created_at"`
+	UpdatedAt  time.Time       `json:"updated_at"`
 }
 
 const policySelect = `
