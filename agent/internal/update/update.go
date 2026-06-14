@@ -92,10 +92,15 @@ func Verify(data []byte, sha256Hex, signatureB64 string, keys []ed25519.PublicKe
 
 // Download fetches up to maxBinaryBytes from url. The body is read fully so
 // the caller can hash and verify before anything touches disk durably.
-func Download(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+// headers (may be nil) are applied to the request — used to carry the
+// device-auth signature when downloading from the rmm server.
+func Download(ctx context.Context, client *http.Client, url string, headers map[string]string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

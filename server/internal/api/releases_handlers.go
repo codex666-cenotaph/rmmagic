@@ -1,9 +1,11 @@
 package api
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -15,7 +17,14 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
 
+// maxReleaseUpload caps a binary upload; matches the agent's download cap.
+const maxReleaseUpload = 256 << 20 // 256 MiB
+
 var validChannels = map[string]bool{"stable": true, "beta": true}
+
+// errReleaseNoBinary is returned when rolling out a release that has neither
+// an uploaded binary nor an external URL.
+var errReleaseNoBinary = errors.New("release has no binary uploaded yet")
 
 type releaseJSON struct {
 	ID        uuid.UUID `json:"id"`
@@ -23,7 +32,8 @@ type releaseJSON struct {
 	Version   string    `json:"version"`
 	OS        string    `json:"os"`
 	Arch      string    `json:"arch"`
-	URL       string    `json:"url"`
+	URL       string    `json:"url,omitempty"`
+	HasBinary bool      `json:"has_binary"`
 	SHA256    string    `json:"sha256"`
 	Signature string    `json:"signature"`
 	SizeBytes int64     `json:"size_bytes"`
@@ -34,7 +44,8 @@ type releaseJSON struct {
 func toReleaseJSON(r store.AgentRelease) releaseJSON {
 	return releaseJSON{
 		ID: r.ID, Channel: r.Channel, Version: r.Version, OS: r.OS, Arch: r.Arch,
-		URL: r.URL, SHA256: r.SHA256, Signature: r.Signature, SizeBytes: r.SizeBytes,
+		URL: r.URL, HasBinary: r.StorageKey != "" || r.URL != "",
+		SHA256: r.SHA256, Signature: r.Signature, SizeBytes: r.SizeBytes,
 		Notes: r.Notes, CreatedAt: r.CreatedAt,
 	}
 }
@@ -94,7 +105,9 @@ func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "version, os, and arch are required")
 		return
 	}
-	if !strings.HasPrefix(req.URL, "https://") && !strings.HasPrefix(req.URL, "http://") {
+	// url is optional: server-hosted releases upload the binary afterwards.
+	// When present it must be http(s).
+	if req.URL != "" && !strings.HasPrefix(req.URL, "https://") && !strings.HasPrefix(req.URL, "http://") {
 		writeError(w, http.StatusBadRequest, "url must be http(s)")
 		return
 	}
@@ -127,6 +140,82 @@ func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": id})
+}
+
+// handleUploadReleaseBinary stores the actual binary for a release in the
+// server's blob storage so agents can fetch it over a device-authenticated
+// endpoint (no dependency on a public/auth-walled artifact host). The
+// uploaded bytes' sha256 must match the value registered with the release;
+// the server cannot verify the Ed25519 signature (no public key
+// server-side) — that remains the agent's check before swapping.
+func (s *Server) handleUploadReleaseBinary(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p, _ := auth.PrincipalFrom(ctx)
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	if s.Blobs == nil {
+		writeError(w, http.StatusServiceUnavailable, "release storage not configured")
+		return
+	}
+
+	var rel store.AgentRelease
+	if err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
+		var err error
+		rel, err = store.GetRelease(ctx, tx, id)
+		return err
+	}); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxReleaseUpload+(1<<20))
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or oversized upload")
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file field")
+		return
+	}
+	defer file.Close()
+
+	// First pass: hash (the multipart file is seekable — spooled to disk
+	// above the in-memory threshold), then rewind and stream to storage.
+	h := sha256.New()
+	if _, err := io.Copy(h, file); err != nil {
+		writeError(w, http.StatusBadRequest, "read upload failed")
+		return
+	}
+	if sum := hex.EncodeToString(h.Sum(nil)); !strings.EqualFold(sum, rel.SHA256) {
+		writeError(w, http.StatusBadRequest, "uploaded file sha256 does not match the registered release")
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	key := "releases/" + id.String()
+	if err := s.Blobs.Put(ctx, key, file, hdr.Size); err != nil {
+		s.Log.Error("release blob write failed", "release_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	err = s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
+		if err := store.SetReleaseStorageKey(ctx, tx, id, key, hdr.Size); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "agent_release.upload", "agent_release", id,
+			map[string]any{"version": rel.Version, "size_bytes": hdr.Size})
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"size_bytes": hdr.Size})
 }
 
 type rolloutReq struct {
@@ -166,6 +255,9 @@ func (s *Server) handleRolloutRelease(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if rel.StorageKey == "" && rel.URL == "" {
+			return errReleaseNoBinary
+		}
 		devices, err := resolveAuthorizedTarget(ctx, tx, req.Target, auth.PermAgentUpdate)
 		if err != nil {
 			return err
@@ -197,6 +289,10 @@ func (s *Server) handleRolloutRelease(w http.ResponseWriter, r *http.Request) {
 	})
 	if errors.Is(err, errNoTargetDevices) {
 		writeError(w, http.StatusBadRequest, errNoTargetDevices.Error())
+		return
+	}
+	if errors.Is(err, errReleaseNoBinary) {
+		writeError(w, http.StatusBadRequest, errReleaseNoBinary.Error())
 		return
 	}
 	if err != nil {

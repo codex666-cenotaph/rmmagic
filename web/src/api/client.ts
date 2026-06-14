@@ -697,7 +697,8 @@ export interface AgentRelease {
   version: string;
   os: string;
   arch: string;
-  url: string;
+  url?: string;
+  has_binary: boolean;
   sha256: string;
   signature: string;
   size_bytes: number;
@@ -731,12 +732,36 @@ export const createRelease = (body: {
   version: string;
   os: string;
   arch: string;
-  url: string;
+  url?: string;
   sha256: string;
   signature: string;
   size_bytes?: number;
   notes?: string;
 }) => request<{ id: string }>("POST", "/agent-releases", body);
+
+// uploadReleaseBinary streams the signed binary to the server, which stores
+// it and serves it to agents behind device auth. Multipart, so it bypasses
+// the JSON `request` helper.
+export const uploadReleaseBinary = async (id: string, file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/agent-releases/${id}/binary`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!res.ok) {
+    let message = res.statusText || `Upload failed (${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data?.error) message = data.error;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as { size_bytes: number };
+};
 
 export const rolloutRelease = (
   id: string,

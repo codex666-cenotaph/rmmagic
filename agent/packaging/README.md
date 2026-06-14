@@ -58,3 +58,36 @@ keys. The plan calls for GPG-signed deb/rpm at release; wire that into the
 release pipeline by setting nfpm's `deb.signature.key_file` /
 `rpm.signature.key_file` (and `*_KEY_ID`) via a release-only overlay config
 that merges over this one, keeping signing keys out of the default build.
+
+## Auto-update signing & release flow
+
+The agent verifies a detached **Ed25519 signature over the exact binary
+bytes** (plus sha256) against a public key embedded at build time before
+swapping. Generate the keypair once:
+
+```sh
+openssl genpkey -algorithm ed25519 -out update_key.pem        # private (CI secret)
+openssl pkey -in update_key.pem -pubout -outform DER | tail -c 32 | base64   # public
+```
+
+Put the private key in the `RMM_UPDATE_SIGNING_KEY` repo secret. Builds embed
+the public key via the `TRUSTED_UPDATE_KEYS` ldflag (comma-separated base64,
+set automatically by `release.yml`; `build.sh` reads it from the env). A
+build with no embedded key refuses all updates (fail closed).
+
+**Releasing a new agent version:**
+
+1. `git tag vX.Y.Z && git push --tags` → `.github/workflows/release.yml`
+   builds, signs, and publishes binaries to a GitHub Release plus an
+   `agent_releases.json` manifest (version/os/arch/sha256/signature).
+2. In the dashboard → **Agent Updates → Register release**: pick the channel,
+   os/arch, choose the binary file (sha256 auto-computed), paste the
+   `signature` from the manifest, and submit. The server stores the binary
+   and serves it to agents behind device auth — so a **private repo /
+   auth-walled artifact host is fine**; agents never touch GitHub.
+3. **Roll out** the release to a site/customer/device and watch each device's
+   phase reach `applied` on the same page.
+
+Releases registered with an external `url` instead of an uploaded binary are
+downloaded by agents unauthenticated (only suitable for a public artifact
+host).

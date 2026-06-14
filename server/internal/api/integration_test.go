@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -30,6 +31,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/storage"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
 	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
@@ -82,10 +84,16 @@ func TestAPIIntegration(t *testing.T) {
 	srv := NewServer(appStore, box, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	gw := gateway.New(appStore, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv.Gateway = gw
+	blobs, err := storage.NewFS(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Blobs = blobs
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", srv.Handler())
 	mux.Handle("/agent/v1/enroll", srv.Handler())
 	mux.Handle("/agent/v1/stats", srv.Handler())
+	mux.Handle("/agent/v1/releases/", srv.Handler())
 	mux.HandleFunc("GET /agent/v1/connect", gw.HandleConnect)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -296,32 +304,44 @@ func testAppsAndUpdatesFlow(t *testing.T, baseURL string, alpha, beta *client, s
 	alpha.post(t, "/api/v1/apps/deploy", obj{"device_id": deviceID, "operation": "frob", "packages": []string{"x"}}, 400)
 	alpha.post(t, "/api/v1/apps/deploy", obj{"device_id": deviceID, "operation": "install", "packages": []string{"bad; rm -rf /"}}, 400)
 
-	// --- Signed release catalog + rollout ---
+	// --- Signed, server-hosted release: register metadata, upload binary,
+	// roll out, download over device-authed endpoint ---
 	binary := []byte("pretend new agent binary bytes")
 	_, relPriv, _ := ed25519.GenerateKey(nil)
 	sum := sha256.Sum256(binary)
 	shaHex := hex.EncodeToString(sum[:])
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(relPriv, binary))
-	alpha.post(t, "/api/v1/agent-releases", obj{
+
+	// Server-hosted release: metadata first, no external URL.
+	created := alpha.post(t, "/api/v1/agent-releases", obj{
 		"channel": "stable", "version": "9.9.9", "os": "linux", "arch": "amd64",
-		"url": "https://example.com/rmmagent-linux-amd64", "sha256": shaHex,
-		"signature": sig, "size_bytes": len(binary), "notes": "test release",
+		"sha256": shaHex, "signature": sig, "notes": "test release",
 	}, 201)
-	// Bad sha256 is rejected.
+	relID := created["id"].(string)
+
+	// Bad sha256 is rejected at registration.
 	alpha.post(t, "/api/v1/agent-releases", obj{
 		"channel": "stable", "version": "9.9.10", "os": "linux", "arch": "amd64",
-		"url": "https://example.com/x", "sha256": "nothex", "signature": sig,
+		"sha256": "nothex", "signature": sig,
 	}, 400)
 
-	var relID string
+	// Rollout before the binary is uploaded is refused.
+	alpha.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 400)
+
+	// Upload: wrong bytes (sha mismatch) → 400; correct bytes → 200.
+	alpha.postFile(t, "/api/v1/agent-releases/"+relID+"/binary", []byte("WRONG BYTES"), 400)
+	alpha.postFile(t, "/api/v1/agent-releases/"+relID+"/binary", binary, 200)
+
+	// Now the catalog reports a binary is present.
+	hasBinary := false
 	for _, r := range alpha.get(t, "/api/v1/agent-releases?channel=stable", 200)["releases"].([]any) {
 		m := r.(map[string]any)
-		if m["version"] == "9.9.9" {
-			relID = m["id"].(string)
+		if m["version"] == "9.9.9" && m["has_binary"] == true {
+			hasBinary = true
 		}
 	}
-	if relID == "" {
-		t.Fatal("created release not listed")
+	if !hasBinary {
+		t.Fatal("release should report has_binary after upload")
 	}
 
 	res := alpha.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 200)
@@ -329,7 +349,8 @@ func testAppsAndUpdatesFlow(t *testing.T, baseURL string, alpha, beta *client, s
 		t.Fatalf("expected 1 matched device, got %v", res["matched"])
 	}
 
-	// The agent receives a signed UpdateOffer over the channel.
+	// The agent receives a signed UpdateOffer whose URL is the device-authed
+	// server download path.
 	octx, cancel2 := context.WithTimeout(ctx, 5*time.Second)
 	var offer *rmmpb.UpdateOffer
 	for offer == nil {
@@ -340,8 +361,33 @@ func testAppsAndUpdatesFlow(t *testing.T, baseURL string, alpha, beta *client, s
 		offer = env.GetUpdateOffer()
 	}
 	cancel2()
-	if offer.Version != "9.9.9" || offer.Sha256 != shaHex {
-		t.Fatalf("unexpected offer: version=%q sha=%q", offer.Version, offer.Sha256)
+	dlPath := "/agent/v1/releases/" + relID + "/download"
+	if offer.Version != "9.9.9" || offer.Sha256 != shaHex || offer.Url != dlPath {
+		t.Fatalf("unexpected offer: version=%q sha=%q url=%q", offer.Version, offer.Sha256, offer.Url)
+	}
+
+	// Device-signed GET returns the exact bytes; unauthenticated GET is 401.
+	tsig := time.Now().Unix()
+	dreq, _ := http.NewRequest("GET", baseURL+dlPath, nil)
+	dreq.Header.Set("X-Device-Id", deviceID)
+	dreq.Header.Set("X-Timestamp", strconv.FormatInt(tsig, 10))
+	dreq.Header.Set("X-Signature", base64.StdEncoding.EncodeToString(devicesig.SignRequest(priv, tsig, []byte(dlPath))))
+	dresp, err := http.DefaultClient.Do(dreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbody, _ := io.ReadAll(dresp.Body)
+	dresp.Body.Close()
+	if dresp.StatusCode != 200 || !bytes.Equal(dbody, binary) {
+		t.Fatalf("signed download failed: status=%d bytes=%q", dresp.StatusCode, dbody)
+	}
+	uresp, err := http.Get(baseURL + dlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uresp.Body.Close()
+	if uresp.StatusCode != 401 {
+		t.Fatalf("unauthenticated download should be 401, got %d", uresp.StatusCode)
 	}
 
 	// Agent reports the update applied; server advances the device version.
@@ -1041,6 +1087,40 @@ func (c *client) req(t *testing.T, method, path string, body any, wantStatus int
 func (c *client) get(t *testing.T, path string, want int) obj {
 	t.Helper()
 	return c.req(t, "GET", path, nil, want)
+}
+
+// postFile uploads data as a multipart "file" field.
+func (c *client) postFile(t *testing.T, path string, data []byte, want int) obj {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "rmmagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	mw.Close()
+	req, err := http.NewRequest("POST", c.base+path, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != want {
+		t.Fatalf("POST %s: got %d want %d (body: %s)", path, resp.StatusCode, want, raw)
+	}
+	out := obj{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
 }
 
 func (c *client) post(t *testing.T, path string, body any, want int) obj {

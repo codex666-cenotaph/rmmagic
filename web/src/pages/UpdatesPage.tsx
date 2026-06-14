@@ -69,7 +69,7 @@ export function UpdatesPage() {
               <th>Version</th>
               <th>Channel</th>
               <th>Platform</th>
-              <th>Size</th>
+              <th>Binary</th>
               <th>Registered</th>
               <th>Actions</th>
             </tr>
@@ -87,11 +87,23 @@ export function UpdatesPage() {
                 <td>
                   {r.os}/{r.arch}
                 </td>
-                <td>{r.size_bytes ? fmtBytes(r.size_bytes) : "—"}</td>
+                <td>
+                  {r.has_binary ? (
+                    r.size_bytes ? fmtBytes(r.size_bytes) : "ready"
+                  ) : (
+                    <span className="badge off">no binary</span>
+                  )}
+                </td>
                 <td>{fmtRelative(r.created_at)}</td>
                 <td>
                   {canManage && (
-                    <button type="button" className="primary" onClick={() => setRolling(r)}>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={!r.has_binary}
+                      title={r.has_binary ? "" : "Upload a binary before rolling out"}
+                      onClick={() => setRolling(r)}
+                    >
                       Roll out
                     </button>
                   )}
@@ -146,6 +158,13 @@ export function UpdatesPage() {
   );
 }
 
+async function sha256Hex(file: File): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function CreateReleaseDialog({
   onClose,
   onSaved,
@@ -157,25 +176,38 @@ function CreateReleaseDialog({
   const [version, setVersion] = useState("");
   const [os, setOS] = useState("linux");
   const [arch, setArch] = useState("amd64");
-  const [url, setURL] = useState("");
+  const [file, setFile] = useState<File | null>(null);
   const [sha256, setSHA256] = useState("");
   const [signature, setSignature] = useState("");
-  const [sizeBytes, setSizeBytes] = useState(0);
   const [notes, setNotes] = useState("");
+  const [hashing, setHashing] = useState(false);
+
+  async function onPickFile(f: File | null) {
+    setFile(f);
+    if (!f) return;
+    setHashing(true);
+    try {
+      // Auto-fill sha256 from the chosen file so it matches the bytes the
+      // server will store; the server rejects a mismatch.
+      setSHA256(await sha256Hex(f));
+    } finally {
+      setHashing(false);
+    }
+  }
 
   const saveMut = useMutation({
-    mutationFn: () =>
-      api.createRelease({
+    mutationFn: async () => {
+      const { id } = await api.createRelease({
         channel,
         version: version.trim(),
         os: os.trim(),
         arch: arch.trim(),
-        url: url.trim(),
         sha256: sha256.trim().toLowerCase(),
         signature: signature.trim(),
-        size_bytes: sizeBytes,
         notes,
-      }),
+      });
+      if (file) await api.uploadReleaseBinary(id, file);
+    },
     onSuccess: onSaved,
   });
 
@@ -184,9 +216,17 @@ function CreateReleaseDialog({
     saveMut.mutate();
   }
 
+  const ready =
+    version.trim() && sha256.trim() && signature.trim() && file && !hashing;
+
   return (
     <Modal title="Register agent release" onClose={onClose}>
       <form style={{ display: "grid", gap: 12 }} onSubmit={onSubmit}>
+        <p className="muted">
+          Pick the signed binary from the release; paste its signature from
+          the pipeline's <code>agent_releases.json</code> manifest. The server
+          stores the binary and serves it to agents behind device auth.
+        </p>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <label>
             Channel
@@ -216,35 +256,29 @@ function CreateReleaseDialog({
           </label>
         </div>
         <label>
-          Download URL
-          <input value={url} onChange={(e) => setURL(e.target.value)} placeholder="https://…/rmmagent-linux-amd64" required />
+          Binary
+          <input
+            type="file"
+            onChange={(e) => void onPickFile(e.target.files?.[0] ?? null)}
+            required
+          />
         </label>
         <label>
-          SHA-256 (hex)
-          <input value={sha256} onChange={(e) => setSHA256(e.target.value)} style={{ fontFamily: "monospace" }} required />
+          SHA-256 (hex){hashing ? " — computing…" : ""}
+          <input value={sha256} onChange={(e) => setSHA256(e.target.value)} style={{ fontFamily: "monospace" }} required readOnly={!!file} />
         </label>
         <label>
           Signature (base64 Ed25519)
           <input value={signature} onChange={(e) => setSignature(e.target.value)} style={{ fontFamily: "monospace" }} required />
         </label>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <label>
-            Size (bytes)
-            <input type="number" min={0} value={sizeBytes} onChange={(e) => setSizeBytes(Number(e.target.value))} />
-          </label>
-          <label>
-            Notes
-            <input value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </label>
-        </div>
+        <label>
+          Notes
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
         <ErrorText error={saveMut.error} />
         <div className="row-actions">
-          <button
-            type="submit"
-            className="primary"
-            disabled={!version.trim() || !url.trim() || !sha256.trim() || !signature.trim() || saveMut.isPending}
-          >
-            Register
+          <button type="submit" className="primary" disabled={!ready || saveMut.isPending}>
+            {saveMut.isPending ? "Uploading…" : "Register & upload"}
           </button>
           <button type="button" onClick={onClose}>
             Cancel

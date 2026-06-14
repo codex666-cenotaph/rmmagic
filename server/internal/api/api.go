@@ -18,6 +18,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/auth"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/storage"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
 
@@ -38,6 +39,9 @@ type Server struct {
 	// Gateway, when set, is notified to kick live agent connections on
 	// decommission.
 	Gateway *gateway.Gateway
+	// Blobs stores/serves large artifacts (agent release binaries). When
+	// nil, server-hosted release upload/download is unavailable.
+	Blobs storage.Store
 
 	loginLimiter *rateLimiter
 }
@@ -118,6 +122,7 @@ func (s *Server) Routes() []Route {
 
 		{Method: "GET", Pattern: "/api/v1/agent-releases", Perm: auth.PermDevicesRead, Handler: s.handleListReleases},
 		{Method: "POST", Pattern: "/api/v1/agent-releases", Perm: auth.PermAgentUpdate, Handler: s.handleCreateRelease},
+		{Method: "POST", Pattern: "/api/v1/agent-releases/{id}/binary", Perm: auth.PermAgentUpdate, Handler: s.handleUploadReleaseBinary},
 		{Method: "POST", Pattern: "/api/v1/agent-releases/{id}/rollout", Perm: auth.PermAgentUpdate, Handler: s.handleRolloutRelease},
 		{Method: "GET", Pattern: "/api/v1/device-updates", Perm: auth.PermDevicesRead, Handler: s.handleListDeviceUpdates},
 		{Method: "POST", Pattern: "/api/v1/devices/{id}/update-channel", Perm: auth.PermDevicesManage, Handler: s.handleSetDeviceUpdateChannel},
@@ -155,6 +160,7 @@ func (s *Server) Routes() []Route {
 		{Method: "POST", Pattern: "/agent/v1/enroll", Public: true, Handler: s.handleAgentEnroll},
 		{Method: "POST", Pattern: "/agent/v1/stats", Public: true, Handler: s.handleAgentStats},
 		{Method: "POST", Pattern: "/agent/v1/inventory", Public: true, Handler: s.handleAgentInventory},
+		{Method: "GET", Pattern: "/agent/v1/releases/{id}/download", Public: true, Handler: s.handleAgentReleaseDownload},
 	}
 }
 

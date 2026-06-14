@@ -13,27 +13,29 @@ import (
 // The table has no tenant_id and no RLS: releases are shared by every
 // tenant. Agents verify sha256 + the Ed25519 signature before swapping.
 type AgentRelease struct {
-	ID        uuid.UUID
-	Channel   string
-	Version   string
-	OS        string
-	Arch      string
-	URL       string
-	SHA256    string
-	Signature string // base64 detached Ed25519 signature over the binary
-	SizeBytes int64
-	Notes     string
-	CreatedBy *uuid.UUID
-	CreatedAt time.Time
+	ID         uuid.UUID
+	Channel    string
+	Version    string
+	OS         string
+	Arch       string
+	URL        string // external download URL; empty for server-hosted releases
+	StorageKey string // blob storage key when the binary is server-hosted
+	SHA256     string
+	Signature  string // base64 detached Ed25519 signature over the binary
+	SizeBytes  int64
+	Notes      string
+	CreatedBy  *uuid.UUID
+	CreatedAt  time.Time
 }
 
 const releaseSelect = `
-	SELECT id, channel, version, os, arch, url, sha256, signature, size_bytes, notes, created_by, created_at
+	SELECT id, channel, version, os, arch, COALESCE(url, ''), COALESCE(storage_key, ''),
+	       sha256, signature, size_bytes, notes, created_by, created_at
 	FROM agent_releases`
 
 func scanRelease(row pgx.Row) (AgentRelease, error) {
 	var r AgentRelease
-	err := row.Scan(&r.ID, &r.Channel, &r.Version, &r.OS, &r.Arch, &r.URL,
+	err := row.Scan(&r.ID, &r.Channel, &r.Version, &r.OS, &r.Arch, &r.URL, &r.StorageKey,
 		&r.SHA256, &r.Signature, &r.SizeBytes, &r.Notes, &r.CreatedBy, &r.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNotFound
@@ -79,16 +81,36 @@ func LatestRelease(ctx context.Context, tx pgx.Tx, channel, os, arch string) (Ag
 		ORDER BY created_at DESC LIMIT 1`, channel, os, arch))
 }
 
-// CreateRelease registers a signed binary in the catalog.
+// CreateRelease registers a release in the catalog. url may be empty for a
+// server-hosted release whose binary is uploaded afterwards (which sets
+// storage_key via SetReleaseStorageKey).
 func CreateRelease(ctx context.Context, tx pgx.Tx, r AgentRelease) (uuid.UUID, error) {
+	var url *string
+	if r.URL != "" {
+		url = &r.URL
+	}
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `
 		INSERT INTO agent_releases (channel, version, os, arch, url, sha256, signature, size_bytes, notes, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		RETURNING id`,
-		r.Channel, r.Version, r.OS, r.Arch, r.URL, r.SHA256, r.Signature, r.SizeBytes, r.Notes, r.CreatedBy).
+		r.Channel, r.Version, r.OS, r.Arch, url, r.SHA256, r.Signature, r.SizeBytes, r.Notes, r.CreatedBy).
 		Scan(&id)
 	return id, err
+}
+
+// SetReleaseStorageKey records the blob storage key (and size) after the
+// binary has been uploaded for a server-hosted release.
+func SetReleaseStorageKey(ctx context.Context, tx pgx.Tx, id uuid.UUID, key string, size int64) error {
+	tag, err := tx.Exec(ctx,
+		`UPDATE agent_releases SET storage_key=$2, size_bytes=$3 WHERE id=$1`, id, key, size)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeviceUpdate is the latest rollout state for one device.

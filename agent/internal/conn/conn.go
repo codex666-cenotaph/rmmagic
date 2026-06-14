@@ -524,7 +524,24 @@ func (a *Agent) handleUpdateOffer(ctx context.Context, ws *websocket.Conn, offer
 	// than the short-lived stats/inventory one.
 	dlCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
-	data, err := update.Download(dlCtx, &http.Client{Timeout: 15 * time.Minute}, offer.Url)
+
+	// A relative path means the binary is served by the rmm server behind
+	// device auth; resolve it against our server URL and sign the request
+	// (over the path) with the device key, exactly like stats uploads.
+	// Absolute URLs (legacy/external) are fetched unauthenticated.
+	downloadURL := offer.Url
+	var headers map[string]string
+	if strings.HasPrefix(offer.Url, "/") {
+		downloadURL = a.ID.ServerURL + offer.Url
+		ts := time.Now().Unix()
+		headers = map[string]string{
+			"X-Device-Id": a.ID.DeviceID,
+			"X-Timestamp": strconv.FormatInt(ts, 10),
+			"X-Signature": base64.StdEncoding.EncodeToString(
+				devicesig.SignRequest(a.Key, ts, []byte(offer.Url))),
+		}
+	}
+	data, err := update.Download(dlCtx, &http.Client{Timeout: 15 * time.Minute}, downloadURL, headers)
 	if err != nil {
 		a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_FAILED,
 			"download failed: "+err.Error())

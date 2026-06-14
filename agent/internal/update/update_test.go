@@ -76,7 +76,7 @@ func TestDownload(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := Download(context.Background(), srv.Client(), srv.URL)
+	got, err := Download(context.Background(), srv.Client(), srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +89,25 @@ func TestDownload(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer bad.Close()
-	if _, err := Download(context.Background(), bad.Client(), bad.URL); err == nil {
+	if _, err := Download(context.Background(), bad.Client(), bad.URL, nil); err == nil {
 		t.Error("expected error on HTTP 404")
+	}
+}
+
+func TestDownloadForwardsHeaders(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	headers := map[string]string{"X-Device-Id": "dev-1", "X-Signature": "sig"}
+	if _, err := Download(context.Background(), srv.Client(), srv.URL, headers); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get("X-Device-Id") != "dev-1" || got.Get("X-Signature") != "sig" {
+		t.Fatalf("auth headers not forwarded: %v", got)
 	}
 }
 

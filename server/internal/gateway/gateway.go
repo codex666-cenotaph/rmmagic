@@ -377,17 +377,26 @@ func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, com
 
 // OfferUpdate sends an UpdateOffer for a release to a connected device.
 // Returns true if the device was online and the frame was sent.
+//
+// For server-hosted releases (StorageKey set) the offer carries the
+// device-authenticated download *path*; the agent resolves it against its
+// own server URL and signs the request. Releases registered with an
+// external URL still send that absolute URL (downloaded unauthenticated).
 func (g *Gateway) OfferUpdate(ctx context.Context, deviceID uuid.UUID, rel store.AgentRelease) bool {
 	sig, err := base64.StdEncoding.DecodeString(rel.Signature)
 	if err != nil {
 		g.Log.Error("release has bad signature encoding", "release_id", rel.ID, "error", err)
 		return false
 	}
+	url := rel.URL
+	if rel.StorageKey != "" {
+		url = "/agent/v1/releases/" + rel.ID.String() + "/download"
+	}
 	return g.Registry.Send(ctx, deviceID, &rmmpb.Envelope{
 		MessageId: uuid.NewString(),
 		Payload: &rmmpb.Envelope_UpdateOffer{UpdateOffer: &rmmpb.UpdateOffer{
 			Version:   rel.Version,
-			Url:       rel.URL,
+			Url:       url,
 			Sha256:    rel.SHA256,
 			Signature: sig,
 		}},
