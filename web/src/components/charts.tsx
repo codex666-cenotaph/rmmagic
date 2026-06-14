@@ -155,20 +155,24 @@ export function BarRows({
   );
 }
 
-// Shared chart palette (semantic CSS variables defined in styles.css).
+// Shared chart palette — a vibrant scheme built around the #FF6C29
+// brand orange: its teal/blue complement plus purple, pink and mint
+// give categorical charts distinct, harmonious colors.
 export const CHART = {
-  online: "#FF6C29",
-  offline: "#E8EAED",
-  decommissioned: "#FF8C54",
+  online: "#FF6C29", // brand orange — active/healthy
+  offline: "#4D7CFE", // cool blue complement — idle
+  decommissioned: "#94A3B8", // neutral slate — retired
   warning: "var(--warn)",
   critical: "var(--error)",
   accent: "#FF6C29",
   series: [
-    "#FF6C29",
-    "#FF8C54",
-    "#FFAA7A",
-    "#FFB89C",
-    "#FFA642",
-    "#FF7A3D",
+    "#FF6C29", // orange (base)
+    "#2EC4B6", // teal (complement)
+    "#4D7CFE", // blue
+    "#9B5DE5", // purple
+    "#F15BB5", // pink
+    "#06D6A0", // mint
+    "#FFB627", // amber
+    "#3A86FF", // azure
   ],
 };
