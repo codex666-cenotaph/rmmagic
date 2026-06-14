@@ -264,7 +264,7 @@ func testPolicyJSONShape(t *testing.T, alpha *client) {
 	alpha.post(t, "/api/v1/channels", obj{
 		"name": "ops", "type": "webhook",
 		"config": obj{"url": "https://example.com/hook"},
-		"secret": "0123456789abcdef0123",
+		"secret": "test-webhook-secret", // gitleaks:allow
 	}, 201)
 	chans := alpha.get(t, "/api/v1/channels", 200)["channels"].([]any)
 	if len(chans) == 0 {
