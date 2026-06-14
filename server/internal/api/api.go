@@ -111,7 +111,10 @@ func (s *Server) Routes() []Route {
 
 		// In-dashboard AI assistant. Any authenticated user may chat; each
 		// tool it runs is authorized against the user's own grants.
+		// Configuring it (provider/model/API key) is a tenant-admin action.
 		{Method: "POST", Pattern: "/api/v1/assistant/chat", Perm: PermSelf, Handler: s.handleAssistantChat},
+		{Method: "GET", Pattern: "/api/v1/assistant/settings", Perm: auth.PermTenantManage, Handler: s.handleGetAssistantSettings},
+		{Method: "PUT", Pattern: "/api/v1/assistant/settings", Perm: auth.PermTenantManage, Handler: s.handleUpdateAssistantSettings},
 
 		{Method: "GET", Pattern: "/api/v1/enrollment-tokens", Perm: auth.PermDevicesEnroll, Handler: s.handleListEnrollmentTokens},
 		{Method: "POST", Pattern: "/api/v1/enrollment-tokens", Perm: auth.PermDevicesEnroll, Handler: s.handleCreateEnrollmentToken},

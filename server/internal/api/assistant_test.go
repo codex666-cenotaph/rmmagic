@@ -9,7 +9,7 @@ import (
 func findTool(t *testing.T, name string) assistantTool {
 	t.Helper()
 	for _, tl := range assistantTools() {
-		if tl.def.OfTool.Name == name {
+		if tl.def.name == name {
 			return tl
 		}
 	}
@@ -85,7 +85,7 @@ func TestAssistantDispatchBuildsBody(t *testing.T) {
 func TestAssistantToolsAreUniqueAndValid(t *testing.T) {
 	seen := map[string]bool{}
 	for _, tl := range assistantTools() {
-		name := tl.def.OfTool.Name
+		name := tl.def.name
 		if name == "" {
 			t.Error("tool with empty name")
 		}

@@ -29,22 +29,45 @@ Dashboard chat ──► POST /api/v1/assistant/chat ──► Claude API (tools
   dashboard — the same RBAC, scope, and RLS checks apply — and nothing more.
   The mass-action blast-radius confirmation flow is honoured too.
 
-## Enabling it
+## Configuring it
 
-Set an Anthropic API key on the server (the `api` role):
+There are two ways to configure the assistant; per-tenant settings take
+precedence over the environment fallback.
+
+### Per-tenant, from the dashboard (recommended)
+
+A tenant admin (`tenant.manage`) configures it under **Settings → AI
+assistant**: enable/disable, pick a **provider**, set the **model**, and paste
+the **API key**. Settings are stored per tenant; the API key is sealed with the
+server master key (`secrets.Box`) and is never returned to the browser. Backed
+by `GET`/`PUT /api/v1/assistant/settings`.
+
+| Provider | Default model | Notes |
+|---|---|---|
+| `anthropic` | `claude-opus-4-8` | Uses the Anthropic Messages API + tool use. |
+| `mistral` | `mistral-large-latest` | Uses Mistral's chat-completions API + function calling. |
+
+The agentic loop is provider-agnostic (`providers.go`): the same tool set and
+internal-dispatch authorization apply to both. Only the model call and
+tool/function encoding differ per provider.
+
+### Environment fallback
+
+If a tenant has no settings (or hasn't enabled the assistant), the server falls
+back to an Anthropic key from the environment:
 
 | Variable | Meaning |
 |---|---|
-| `RMM_ANTHROPIC_API_KEY` | Anthropic API key. When unset, the endpoint returns 503 and the panel shows an "unavailable" message. |
-| `RMM_ASSISTANT_MODEL` | Optional model override (default `claude-opus-4-8`). |
+| `RMM_ANTHROPIC_API_KEY` | Anthropic API key. When neither this nor per-tenant settings are present, the endpoint returns 503 and the panel shows an "unavailable" message. |
+| `RMM_ASSISTANT_MODEL` | Optional model override for the fallback (default `claude-opus-4-8`). |
 
 ```sh
 RMM_ANTHROPIC_API_KEY=sk-ant-... \
   go -C server run ./cmd/rmmserver --roles=api,gateway,worker
 ```
 
-The key lives only on the server; it is never sent to the browser, and the
-model never sees the user's session or any credential.
+Either way, the key lives only on the server; it is never sent to the browser,
+and the model never sees the user's session or any credential.
 
 ## Relationship to the MCP server
 

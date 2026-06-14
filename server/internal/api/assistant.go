@@ -5,35 +5,26 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// Assistant holds the configuration for the in-dashboard AI assistant.
-// It is created from RMM_ANTHROPIC_API_KEY in main; when nil the chat
-// endpoint reports that the feature is not configured.
+// Assistant holds the fallback assistant configuration sourced from the
+// environment (RMM_ANTHROPIC_API_KEY / RMM_ASSISTANT_MODEL). Per-tenant
+// settings configured in the dashboard take precedence; this is used only
+// when a tenant has not configured its own.
 type Assistant struct {
-	Client anthropic.Client
-	Model  anthropic.Model
+	Provider string
+	APIKey   string
+	Model    string
 }
 
-// NewAssistant builds an Assistant from an Anthropic API key. model may
-// be empty to use the default.
+// NewAssistant builds the environment fallback (Anthropic provider). model
+// may be empty to use the provider default.
 func NewAssistant(apiKey, model string) *Assistant {
-	m := anthropic.Model(model)
-	if m == "" {
-		m = anthropic.ModelClaudeOpus4_8
-	}
-	return &Assistant{
-		Client: anthropic.NewClient(option.WithAPIKey(apiKey)),
-		Model:  m,
-	}
+	return &Assistant{Provider: providerAnthropic, APIKey: apiKey, Model: model}
 }
 
-// assistantSystemPrompt frames the model as an operations assistant and,
-// per Opus 4.8 guidance, grants autonomy on reads while keeping it
-// cautious about state-changing actions.
+// assistantSystemPrompt frames the model as an operations assistant and
+// grants autonomy on reads while keeping it cautious about state changes.
 const assistantSystemPrompt = `You are the rmmagic assistant, embedded in an RMM (Remote Monitoring & Management) dashboard for an MSP. You help technicians inspect and manage their fleet of monitored devices by calling the provided tools.
 
 Guidance:
@@ -43,9 +34,19 @@ Guidance:
 - When running a script, if the API responds that confirmation is required because the action affects many devices, surface the device count to the user and only proceed once they confirm — passing the returned confirm_token.
 - Lead with the answer. Be concise; render IDs and hostnames plainly. Don't dump raw JSON at the user — summarize it.`
 
-// assistantTool binds a model-facing tool to an internal API call.
+// toolSpec is the provider-neutral description of a tool. Each provider
+// translates it into its own tool/function-calling schema.
+type toolSpec struct {
+	name        string
+	description string
+	schema      map[string]any
+	required    []string
+}
+
+// assistantTool binds a tool's neutral spec to the internal API call it
+// performs.
 type assistantTool struct {
-	def anthropic.ToolUnionParam
+	def toolSpec
 	// build turns the model's arguments into an internal request.
 	build func(args map[string]any) (method, path string, body []byte, err error)
 }
@@ -78,12 +79,8 @@ func argInt(a map[string]any, key string) int {
 	return 0
 }
 
-func tool(name, desc string, props map[string]any, required []string) anthropic.ToolUnionParam {
-	return anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
-		Name:        name,
-		Description: anthropic.String(desc),
-		InputSchema: anthropic.ToolInputSchemaParam{Properties: props, Required: required},
-	}}
+func tool(name, desc string, props map[string]any, required []string) toolSpec {
+	return toolSpec{name: name, description: desc, schema: props, required: required}
 }
 
 func strProp(desc string) map[string]any {

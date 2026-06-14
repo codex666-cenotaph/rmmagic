@@ -701,6 +701,29 @@ export interface AssistantReply {
 export const chatAssistant = (messages: AssistantMessage[]) =>
   request<AssistantReply>("POST", "/assistant/chat", { messages });
 
+export type AssistantProvider = "anthropic" | "mistral";
+
+export interface AssistantSettings {
+  enabled: boolean;
+  provider: AssistantProvider;
+  model: string;
+  key_set: boolean;
+}
+
+export interface AssistantSettingsBody {
+  enabled: boolean;
+  provider: AssistantProvider;
+  model: string;
+  // Omit to keep the stored key; send a non-empty string to replace it.
+  api_key?: string;
+}
+
+export const getAssistantSettings = () =>
+  request<AssistantSettings>("GET", "/assistant/settings");
+
+export const updateAssistantSettings = (body: AssistantSettingsBody) =>
+  request<void>("PUT", "/assistant/settings", body);
+
 // ---- App deployment (apt/dnf package jobs) ----
 
 export type PackageOperation = "install" | "remove";
