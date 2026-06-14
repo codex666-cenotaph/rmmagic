@@ -89,6 +89,14 @@ Single static binary, root, systemd-hardened unit. Persistent WS with jittered b
 4. **RLS + connection pooling** — `SET LOCAL` per transaction only; cross-tenant probe suite is the guardrail.
 5. **Telemetry volume** — partitioning/rollups buy time; keep ingest behind an interface so TimescaleDB/ClickHouse can slot in without touching agents.
 
+## Working conventions
+
+- **Branch names must be descriptive**, not random. Use
+  `<type>/<short-kebab-summary>` where `type` ∈ `feat|fix|chore|refactor|docs`
+  — e.g. `feat/rule-based-app-deployment`, `fix/policies-snake-case-dto`.
+  Avoid auto-generated codename branches like `claude/peaceful-mccarthy-0pxg2o`;
+  the name should say what the branch does at a glance.
+
 ## First files to create (in order of leverage)
 
 1. `proto/rmm/v1/agent.proto` — protocol envelope everything depends on
