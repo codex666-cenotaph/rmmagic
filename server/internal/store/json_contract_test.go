@@ -38,3 +38,14 @@ func TestAlertJSONContract(t *testing.T) {
 		"message", "details", "channel_ids", "status", "fired_at",
 		"resolved_at", "acked_by", "acked_at")
 }
+
+func TestAppPackageJSONContract(t *testing.T) {
+	assertJSONKeys(t, AppPackage{}, "id", "name", "description", "os",
+		"install", "detection", "timeout_s", "archived", "created_at", "updated_at")
+}
+
+func TestDeploymentRuleJSONContract(t *testing.T) {
+	assertJSONKeys(t, DeploymentRule{}, "id", "package_id", "package_name",
+		"package_os", "name", "scope_type", "scope_id", "filters", "enabled",
+		"last_run_at", "created_at", "updated_at")
+}

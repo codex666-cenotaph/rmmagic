@@ -23,7 +23,8 @@ async function request<T>(
   const res = await fetch(BASE + path, {
     method,
     credentials: "include",
-    headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    headers:
+      body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -189,7 +190,8 @@ export const logout = () => request<void>("POST", "/auth/logout");
 
 export const getMe = () => request<Me>("GET", "/auth/me");
 
-export const mfaSetup = () => request<MfaSetupResponse>("POST", "/auth/mfa/setup");
+export const mfaSetup = () =>
+  request<MfaSetupResponse>("POST", "/auth/mfa/setup");
 
 export const mfaEnable = (code: string) =>
   request<MfaEnableResponse>("POST", "/auth/mfa/enable", { code });
@@ -211,7 +213,11 @@ export const deleteCustomer = (id: string) =>
 export const listSites = (customerId: string) =>
   request<{ sites: Site[] }>("GET", `/customers/${customerId}/sites`);
 
-export const createSite = (customerId: string, name: string, timezone?: string) =>
+export const createSite = (
+  customerId: string,
+  name: string,
+  timezone?: string,
+) =>
   request<Site>(
     "POST",
     `/customers/${customerId}/sites`,
@@ -223,7 +229,8 @@ export const updateSite = (
   patch: { name?: string; timezone?: string },
 ) => request<unknown>("PATCH", `/sites/${id}`, patch);
 
-export const deleteSite = (id: string) => request<void>("DELETE", `/sites/${id}`);
+export const deleteSite = (id: string) =>
+  request<void>("DELETE", `/sites/${id}`);
 
 // ---- Users & roles ----
 
@@ -266,7 +273,8 @@ export const revokeToken = (id: string) =>
 export const listDevices = () =>
   request<{ devices: Device[] }>("GET", "/devices");
 
-export const getDevice = (id: string) => request<Device>("GET", `/devices/${id}`);
+export const getDevice = (id: string) =>
+  request<Device>("GET", `/devices/${id}`);
 
 export const getDeviceStats = (id: string, since?: string, until?: string) => {
   const q = new URLSearchParams();
@@ -294,7 +302,8 @@ export const createEnrollmentToken = (body: {
   site_id: string;
   expires_at?: string;
   max_uses?: number;
-}) => request<{ id: string; token: string }>("POST", "/enrollment-tokens", body);
+}) =>
+  request<{ id: string; token: string }>("POST", "/enrollment-tokens", body);
 
 export const revokeEnrollmentToken = (id: string) =>
   request<void>("DELETE", `/enrollment-tokens/${id}`);
@@ -400,7 +409,8 @@ export const listScripts = (archived = false) =>
     `/scripts${archived ? "?archived=true" : ""}`,
   );
 
-export const getScript = (id: string) => request<Script>("GET", `/scripts/${id}`);
+export const getScript = (id: string) =>
+  request<Script>("GET", `/scripts/${id}`);
 
 export const createScript = (body: {
   name: string;
@@ -641,8 +651,7 @@ export const listAlerts = (params?: {
   return request<{ alerts: Alert[] }>("GET", `/alerts${qs ? `?${qs}` : ""}`);
 };
 
-export const getAlert = (id: string) =>
-  request<Alert>("GET", `/alerts/${id}`);
+export const getAlert = (id: string) => request<Alert>("GET", `/alerts/${id}`);
 
 export const ackAlert = (id: string) =>
   request<void>("POST", `/alerts/${id}/ack`);
@@ -695,6 +704,99 @@ export const deployApp = (body: {
     "/apps/deploy",
     body,
   );
+
+// ---- App packages & deployment rules (rule-based deployment) ----
+
+export type PackageOS = "linux" | "windows" | "darwin";
+
+export interface AppPackage {
+  id: string;
+  name: string;
+  description: string;
+  os: PackageOS;
+  install: { packages?: string[] };
+  detection: { method: string; names: string[] };
+  timeout_s: number;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AppPackageBody {
+  name: string;
+  description: string;
+  os: PackageOS;
+  packages: string[];
+  // Names whose presence in inventory proves the app is installed. Empty
+  // means "detect by the install package names".
+  detection_names: string[];
+  timeout_s?: number;
+}
+
+export const listAppPackages = (archived = false) =>
+  request<{ packages: AppPackage[] }>(
+    "GET",
+    `/app-packages${archived ? "?archived=true" : ""}`,
+  );
+
+export const getAppPackage = (id: string) =>
+  request<AppPackage>("GET", `/app-packages/${id}`);
+
+export const createAppPackage = (body: AppPackageBody) =>
+  request<{ id: string }>("POST", "/app-packages", body);
+
+export const updateAppPackage = (id: string, body: AppPackageBody) =>
+  request<void>("PUT", `/app-packages/${id}`, body);
+
+export const archiveAppPackage = (id: string) =>
+  request<void>("DELETE", `/app-packages/${id}`);
+
+export type DeployScopeType = "tenant" | "customer" | "site" | "device";
+
+export interface DeploymentRuleFilters {
+  tags?: string[];
+  tags_match?: "any" | "all";
+  hostname_regex?: string;
+}
+
+export interface DeploymentRule {
+  id: string;
+  package_id: string;
+  package_name: string;
+  package_os: PackageOS;
+  name: string;
+  scope_type: DeployScopeType;
+  scope_id: string | null;
+  filters: DeploymentRuleFilters;
+  enabled: boolean;
+  last_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeploymentRuleBody {
+  package_id: string;
+  name: string;
+  scope_type: DeployScopeType;
+  scope_id?: string;
+  filters: DeploymentRuleFilters;
+  enabled: boolean;
+}
+
+export const listDeploymentRules = () =>
+  request<{ rules: DeploymentRule[] }>("GET", "/deployment-rules");
+
+export const getDeploymentRule = (id: string) =>
+  request<DeploymentRule>("GET", `/deployment-rules/${id}`);
+
+export const createDeploymentRule = (body: DeploymentRuleBody) =>
+  request<{ id: string }>("POST", "/deployment-rules", body);
+
+export const updateDeploymentRule = (id: string, body: DeploymentRuleBody) =>
+  request<void>("PUT", `/deployment-rules/${id}`, body);
+
+export const deleteDeploymentRule = (id: string) =>
+  request<void>("DELETE", `/deployment-rules/${id}`);
 
 // ---- Agent releases & auto-update ----
 

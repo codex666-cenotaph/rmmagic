@@ -128,6 +128,13 @@ func (w *Worker) tickTenant(ctx context.Context, tenantID uuid.UUID) {
 		}
 	}
 
+	// Reconcile rule-based app deployments: each enabled rule is claimed
+	// at most hourly and creates install jobs for in-scope devices that
+	// don't already have the app.
+	if err := w.reconcileDeployments(ctx, tenantID); err != nil {
+		w.Log.Error("worker: deployment reconciliation failed", "tenant_id", tenantID, "error", err)
+	}
+
 	// Evaluate monitoring policies and fan out alert notifications.
 	if err := w.evaluateAlerts(ctx, tenantID); err != nil {
 		w.Log.Error("worker: alert evaluation failed", "tenant_id", tenantID, "error", err)

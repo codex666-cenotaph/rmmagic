@@ -82,7 +82,18 @@ const NAV: NavGroup[] = [
         icon: SchedulesIcon,
         perm: "scripts.read",
       },
-      { to: "/apps", label: "App Deployment", icon: AppsIcon, perm: "apps.deploy" },
+      {
+        to: "/deployments",
+        label: "App Deployment",
+        icon: AppsIcon,
+        perm: "apps.read",
+      },
+      {
+        to: "/apps",
+        label: "Quick Deploy",
+        icon: AppsIcon,
+        perm: "apps.deploy",
+      },
       {
         to: "/updates",
         label: "Agent Updates",
