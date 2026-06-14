@@ -258,6 +258,32 @@ func testPolicyJSONShape(t *testing.T, alpha *client) {
 	if _, ok := found["channel_ids"].([]any); !ok {
 		t.Fatalf("channel_ids must serialize as an array, got %T", found["channel_ids"])
 	}
+
+	// Notification channels: same snake_case contract; the sealed secret
+	// must never be serialized.
+	alpha.post(t, "/api/v1/channels", obj{
+		"name": "ops", "type": "webhook",
+		"config": obj{"url": "https://example.com/hook"},
+		"secret": "0123456789abcdef0123",
+	}, 201)
+	chans := alpha.get(t, "/api/v1/channels", 200)["channels"].([]any)
+	if len(chans) == 0 {
+		t.Fatal("created channel not returned by list")
+	}
+	ch := chans[0].(map[string]any)
+	for _, key := range []string{"id", "name", "type", "config", "created_at"} {
+		if _, ok := ch[key]; !ok {
+			t.Fatalf("channel JSON missing %q key (got keys %v)", key, keysOf(ch))
+		}
+	}
+	if _, ok := ch["config"].(map[string]any); !ok {
+		t.Fatalf("channel config must serialize as an object, got %T", ch["config"])
+	}
+	for _, leak := range []string{"secret_enc", "SecretEnc", "secret"} {
+		if _, bad := ch[leak]; bad {
+			t.Fatalf("channel JSON leaks secret field %q", leak)
+		}
+	}
 }
 
 func keysOf(m map[string]any) []string {

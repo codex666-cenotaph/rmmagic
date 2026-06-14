@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -10,6 +11,25 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/auth"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
+
+// channelJSON is the snake_case wire shape the dashboard expects. Using a
+// DTO (rather than tagging the store struct) also guarantees the sealed
+// webhook secret (NotificationChannel.SecretEnc) is never serialized.
+type channelJSON struct {
+	ID        uuid.UUID       `json:"id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Config    json.RawMessage `json:"config"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+func toChannelJSON(c store.NotificationChannel) channelJSON {
+	cfg := c.Config
+	if len(cfg) == 0 {
+		cfg = json.RawMessage("{}")
+	}
+	return channelJSON{ID: c.ID, Name: c.Name, Type: c.Type, Config: cfg, CreatedAt: c.CreatedAt}
+}
 
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -24,7 +44,11 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
+	out := make([]channelJSON, 0, len(channels))
+	for _, c := range channels {
+		out = append(out, toChannelJSON(c))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": out})
 }
 
 func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) {

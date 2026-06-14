@@ -116,8 +116,8 @@ export function PoliciesPage() {
                   <td>{ch.type}</td>
                   <td className="muted">
                     {ch.type === "email"
-                      ? ((ch.config as { recipients?: string[] }).recipients ?? []).join(", ")
-                      : (ch.config as { url?: string }).url ?? ""}
+                      ? ((ch.config as { recipients?: string[] })?.recipients ?? []).join(", ")
+                      : (ch.config as { url?: string })?.url ?? ""}
                   </td>
                   <td>
                     {canManage && (
