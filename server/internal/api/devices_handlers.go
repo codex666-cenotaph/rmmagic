@@ -24,11 +24,12 @@ type deviceJSON struct {
 	Hostname     string     `json:"hostname"`
 	OS           string     `json:"os"`
 	Arch         string     `json:"arch"`
-	AgentVersion string     `json:"agent_version"`
-	Status       string     `json:"status"`
-	Online       bool       `json:"online"`
-	LastSeenAt   *time.Time `json:"last_seen_at"`
-	CreatedAt    time.Time  `json:"created_at"`
+	AgentVersion  string     `json:"agent_version"`
+	Status        string     `json:"status"`
+	UpdateChannel string     `json:"update_channel"`
+	Online        bool       `json:"online"`
+	LastSeenAt    *time.Time `json:"last_seen_at"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 func toDeviceJSON(d store.Device) deviceJSON {
@@ -37,7 +38,7 @@ func toDeviceJSON(d store.Device) deviceJSON {
 		ID: d.ID, SiteID: d.SiteID, SiteName: d.SiteName,
 		CustomerID: d.CustomerID, CustomerName: d.CustomerName,
 		Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
-		AgentVersion: d.AgentVersion, Status: d.Status, Online: online,
+		AgentVersion: d.AgentVersion, Status: d.Status, UpdateChannel: d.UpdateChannel, Online: online,
 		LastSeenAt: d.LastSeenAt, CreatedAt: d.CreatedAt,
 	}
 }

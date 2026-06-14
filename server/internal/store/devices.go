@@ -17,16 +17,17 @@ type Device struct {
 	CustomerName string
 	Hostname     string
 	OS           string
-	Arch         string
-	AgentVersion string
-	Status       string
-	LastSeenAt   *time.Time
-	CreatedAt    time.Time
+	Arch          string
+	AgentVersion  string
+	Status        string
+	UpdateChannel string
+	LastSeenAt    *time.Time
+	CreatedAt     time.Time
 }
 
 const deviceSelect = `
 	SELECT d.id, d.site_id, s.customer_id, s.name, c.name,
-	       d.hostname, d.os, d.arch, d.agent_version, d.status, d.last_seen_at, d.created_at
+	       d.hostname, d.os, d.arch, d.agent_version, d.status, d.update_channel, d.last_seen_at, d.created_at
 	FROM devices d
 	JOIN sites s ON s.id = d.site_id
 	JOIN customers c ON c.id = s.customer_id`
@@ -34,7 +35,7 @@ const deviceSelect = `
 func scanDevice(row pgx.Row) (Device, error) {
 	var d Device
 	err := row.Scan(&d.ID, &d.SiteID, &d.CustomerID, &d.SiteName, &d.CustomerName,
-		&d.Hostname, &d.OS, &d.Arch, &d.AgentVersion, &d.Status, &d.LastSeenAt, &d.CreatedAt)
+		&d.Hostname, &d.OS, &d.Arch, &d.AgentVersion, &d.Status, &d.UpdateChannel, &d.LastSeenAt, &d.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, ErrNotFound
 	}
@@ -85,6 +86,20 @@ func TouchDevice(ctx context.Context, tx pgx.Tx, id uuid.UUID, agentVersion stri
 		       agent_version = CASE WHEN $2 = '' THEN agent_version ELSE $2 END
 		WHERE id = $1`, id, agentVersion)
 	return err
+}
+
+// SetDeviceUpdateChannel changes which release channel a device follows.
+func SetDeviceUpdateChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID, channel string) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE devices SET update_channel = $2, updated_at = now()
+		WHERE id = $1 AND status = 'active'`, id, channel)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DecommissionDevice marks the device decommissioned and revokes all of

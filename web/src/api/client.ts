@@ -132,6 +132,7 @@ export interface Device {
   arch: string;
   agent_version: string;
   status: DeviceStatus;
+  update_channel: ReleaseChannel;
   online: boolean;
   last_seen_at: string | null;
   created_at: string;
@@ -333,17 +334,21 @@ export type JobStatus =
   | "timed_out"
   | "expired";
 
+export type JobKind = "script" | "package_install" | "package_remove";
+
 export interface Job {
   id: string;
-  script_id: string;
-  script_name: string;
+  kind: JobKind;
+  script_id?: string;
+  script_name?: string;
   device_id: string;
   hostname: string;
   command_id: string;
   status: JobStatus;
   timeout_s: number;
-  language: ScriptLanguage;
+  language?: ScriptLanguage;
   parameters: Record<string, string>;
+  spec?: { packages?: string[] };
   schedule_id?: string;
   created_at: string;
   expires_at: string;
@@ -663,6 +668,91 @@ export const createChannel = (body: ChannelBody) =>
 
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
+
+// ---- App deployment (apt/dnf package jobs) ----
+
+export type PackageOperation = "install" | "remove";
+
+export const deployApp = (body: {
+  operation: PackageOperation;
+  packages: string[];
+  target: JobTarget;
+  timeout_s?: number;
+  expires_in_s?: number;
+  confirm_token?: string;
+}) =>
+  request<{ job_ids: string[]; device_count: number }>(
+    "POST",
+    "/apps/deploy",
+    body,
+  );
+
+// ---- Agent releases & auto-update ----
+
+export type ReleaseChannel = "stable" | "beta";
+
+export interface AgentRelease {
+  id: string;
+  channel: ReleaseChannel;
+  version: string;
+  os: string;
+  arch: string;
+  url: string;
+  sha256: string;
+  signature: string;
+  size_bytes: number;
+  notes: string;
+  created_at: string;
+}
+
+export interface DeviceUpdate {
+  device_id: string;
+  version: string;
+  phase:
+    | "offered"
+    | "downloading"
+    | "verified"
+    | "applied"
+    | "rolled_back"
+    | "failed";
+  error?: string;
+  offered_at: string;
+  updated_at: string;
+}
+
+export const listReleases = (channel?: ReleaseChannel) =>
+  request<{ releases: AgentRelease[] }>(
+    "GET",
+    `/agent-releases${channel ? `?channel=${channel}` : ""}`,
+  );
+
+export const createRelease = (body: {
+  channel: ReleaseChannel;
+  version: string;
+  os: string;
+  arch: string;
+  url: string;
+  sha256: string;
+  signature: string;
+  size_bytes?: number;
+  notes?: string;
+}) => request<{ id: string }>("POST", "/agent-releases", body);
+
+export const rolloutRelease = (
+  id: string,
+  body: { target: JobTarget; confirm_token?: string },
+) =>
+  request<{ version: string; matched: number; online_offered: number }>(
+    "POST",
+    `/agent-releases/${id}/rollout`,
+    body,
+  );
+
+export const listDeviceUpdates = () =>
+  request<{ updates: DeviceUpdate[] }>("GET", "/device-updates");
+
+export const setUpdateChannel = (deviceId: string, channel: ReleaseChannel) =>
+  request<unknown>("POST", `/devices/${deviceId}/update-channel`, { channel });
 
 // ---- Audit ----
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -156,6 +157,8 @@ func (g *Gateway) serve(ctx context.Context, ac *agentConn, deviceID, tenantID u
 			// Acks for non-command messages; no-op for now.
 		case *rmmpb.Envelope_CommandResult:
 			g.handleCommandResult(ctx, tenantID, p.CommandResult)
+		case *rmmpb.Envelope_UpdateStatus:
+			g.handleUpdateStatus(ctx, tenantID, deviceID, p.UpdateStatus)
 		default:
 			g.Log.Warn("unexpected frame from agent", "device_id", deviceID)
 		}
@@ -175,7 +178,7 @@ func (g *Gateway) drainPendingJobs(ctx context.Context, ac *agentConn, tenantID,
 		return
 	}
 	for _, pj := range pending {
-		spec, err := buildScriptSpec(pj.Language, pj.ScriptBody, pj.Parameters)
+		kind, spec, err := commandForPendingJob(pj)
 		if err != nil {
 			g.Log.Error("build spec failed", "job_id", pj.JobID, "error", err)
 			continue
@@ -184,7 +187,7 @@ func (g *Gateway) drainPendingJobs(ctx context.Context, ac *agentConn, tenantID,
 			MessageId: uuid.NewString(),
 			Payload: &rmmpb.Envelope_CommandRequest{CommandRequest: &rmmpb.CommandRequest{
 				CommandId: pj.CommandID,
-				Kind:      rmmpb.CommandKind_COMMAND_KIND_SCRIPT,
+				Kind:      kind,
 				Spec:      spec,
 				ExpiresAt: timestamppb.New(pj.ExpiresAt),
 				TimeoutS:  uint32(pj.TimeoutS),
@@ -231,6 +234,45 @@ func (g *Gateway) handleCommandResult(ctx context.Context, tenantID uuid.UUID, r
 	}
 }
 
+// handleUpdateStatus persists an agent-reported update phase. On a
+// successful apply the device's recorded agent_version advances too, so the
+// fleet view reflects the new build before the next heartbeat.
+func (g *Gateway) handleUpdateStatus(ctx context.Context, tenantID, deviceID uuid.UUID, st *rmmpb.UpdateStatus) {
+	if st == nil {
+		return
+	}
+	phase := updatePhaseString(st.Phase)
+	if err := g.Store.WithTenant(ctx, tenantID, func(tx pgx.Tx) error {
+		if err := store.SetDeviceUpdatePhase(ctx, tx, deviceID, st.Version, phase, st.Error); err != nil {
+			return err
+		}
+		if st.Phase == rmmpb.UpdatePhase_UPDATE_PHASE_APPLIED {
+			return store.TouchDevice(ctx, tx, deviceID, st.Version)
+		}
+		return nil
+	}); err != nil {
+		g.Log.Error("update status persist failed", "device_id", deviceID, "error", err)
+	}
+	g.Log.Info("update status", "device_id", deviceID, "version", st.Version, "phase", phase)
+}
+
+func updatePhaseString(p rmmpb.UpdatePhase) string {
+	switch p {
+	case rmmpb.UpdatePhase_UPDATE_PHASE_DOWNLOADING:
+		return "downloading"
+	case rmmpb.UpdatePhase_UPDATE_PHASE_VERIFIED:
+		return "verified"
+	case rmmpb.UpdatePhase_UPDATE_PHASE_APPLIED:
+		return "applied"
+	case rmmpb.UpdatePhase_UPDATE_PHASE_ROLLED_BACK:
+		return "rolled_back"
+	case rmmpb.UpdatePhase_UPDATE_PHASE_FAILED:
+		return "failed"
+	default:
+		return "offered"
+	}
+}
+
 func commandStatusString(s rmmpb.CommandStatus) string {
 	switch s {
 	case rmmpb.CommandStatus_COMMAND_STATUS_SUCCEEDED:
@@ -263,10 +305,33 @@ func buildScriptSpec(language, body string, params json.RawMessage) ([]byte, err
 	return json.Marshal(spec)
 }
 
-// DispatchJob sends a script job to a connected device. Returns true if
-// the device was online and the frame was sent.
+// commandKindFor maps a job kind string to the protocol CommandKind.
+func commandKindFor(kind string) rmmpb.CommandKind {
+	switch kind {
+	case "package_install":
+		return rmmpb.CommandKind_COMMAND_KIND_PACKAGE_INSTALL
+	case "package_remove":
+		return rmmpb.CommandKind_COMMAND_KIND_PACKAGE_REMOVE
+	default:
+		return rmmpb.CommandKind_COMMAND_KIND_SCRIPT
+	}
+}
+
+// commandForPendingJob builds the protocol kind and spec bytes for a
+// (re-)dispatched job: script bodies are assembled from the snapshot,
+// package jobs forward their stored spec verbatim.
+func commandForPendingJob(pj store.PendingJob) (rmmpb.CommandKind, []byte, error) {
+	if pj.Kind == "package_install" || pj.Kind == "package_remove" {
+		return commandKindFor(pj.Kind), []byte(pj.Spec), nil
+	}
+	spec, err := buildScriptSpec(pj.Language, pj.ScriptBody, pj.Parameters)
+	return rmmpb.CommandKind_COMMAND_KIND_SCRIPT, spec, err
+}
+
+// DispatchJob sends a job (script or package) to a connected device.
+// Returns true if the device was online and the frame was sent.
 func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uuid.UUID, commandID string) bool {
-	spec, timeoutS, expiresAt, err := g.jobSpecForCommand(ctx, tenantID, commandID)
+	kind, spec, timeoutS, expiresAt, err := g.jobSpecForCommand(ctx, tenantID, commandID)
 	if err != nil {
 		g.Log.Error("dispatch job spec failed", "job_id", jobID, "error", err)
 		return false
@@ -275,7 +340,7 @@ func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uui
 		MessageId: uuid.NewString(),
 		Payload: &rmmpb.Envelope_CommandRequest{CommandRequest: &rmmpb.CommandRequest{
 			CommandId: commandID,
-			Kind:      rmmpb.CommandKind_COMMAND_KIND_SCRIPT,
+			Kind:      kind,
 			Spec:      spec,
 			ExpiresAt: timestamppb.New(expiresAt),
 			TimeoutS:  uint32(timeoutS),
@@ -283,29 +348,50 @@ func (g *Gateway) DispatchJob(ctx context.Context, tenantID, deviceID, jobID uui
 	})
 }
 
-func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, commandID string) ([]byte, int, time.Time, error) {
+func (g *Gateway) jobSpecForCommand(ctx context.Context, tenantID uuid.UUID, commandID string) (rmmpb.CommandKind, []byte, int, time.Time, error) {
+	var kind rmmpb.CommandKind
 	var spec []byte
 	var timeoutS int
 	var expiresAt time.Time
 	err := g.Store.WithTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx,
-			`SELECT language, script_body, parameters, timeout_s, expires_at FROM jobs WHERE command_id=$1`, commandID)
+		var jobKind, lang, body string
+		var params, pkgSpec json.RawMessage
+		err := tx.QueryRow(ctx, `
+			SELECT kind, COALESCE(language,''), COALESCE(script_body,''),
+			       parameters, COALESCE(spec,'null'::jsonb), timeout_s, expires_at
+			FROM jobs WHERE command_id=$1`, commandID).
+			Scan(&jobKind, &lang, &body, &params, &pkgSpec, &timeoutS, &expiresAt)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		if !rows.Next() {
-			return store.ErrNotFound
-		}
-		var lang, body string
-		var params json.RawMessage
-		if err := rows.Scan(&lang, &body, &params, &timeoutS, &expiresAt); err != nil {
-			return err
+		kind = commandKindFor(jobKind)
+		if jobKind == "package_install" || jobKind == "package_remove" {
+			spec = []byte(pkgSpec)
+			return nil
 		}
 		spec, err = buildScriptSpec(lang, body, params)
 		return err
 	})
-	return spec, timeoutS, expiresAt, err
+	return kind, spec, timeoutS, expiresAt, err
+}
+
+// OfferUpdate sends an UpdateOffer for a release to a connected device.
+// Returns true if the device was online and the frame was sent.
+func (g *Gateway) OfferUpdate(ctx context.Context, deviceID uuid.UUID, rel store.AgentRelease) bool {
+	sig, err := base64.StdEncoding.DecodeString(rel.Signature)
+	if err != nil {
+		g.Log.Error("release has bad signature encoding", "release_id", rel.ID, "error", err)
+		return false
+	}
+	return g.Registry.Send(ctx, deviceID, &rmmpb.Envelope{
+		MessageId: uuid.NewString(),
+		Payload: &rmmpb.Envelope_UpdateOffer{UpdateOffer: &rmmpb.UpdateOffer{
+			Version:   rel.Version,
+			Url:       rel.URL,
+			Sha256:    rel.SHA256,
+			Signature: sig,
+		}},
+	})
 }
 
 // touch updates last_seen_at, throttled so heartbeats don't write the

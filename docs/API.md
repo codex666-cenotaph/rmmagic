@@ -106,13 +106,50 @@ command when they reconnect, until `expires_at` passes.
 
 | Method/Path | Permission | Response |
 |---|---|---|
-| GET /jobs?device_id= | scripts.read | `{jobs: [{id, script_id, script_name, device_id, hostname, command_id, status, timeout_s, language, parameters, schedule_id?, created_at, expires_at, sent_at?, started_at?, finished_at?}]}` newest first, scope-filtered |
+| GET /jobs?device_id= | scripts.read | `{jobs: [{id, kind, script_id?, script_name?, device_id, hostname, command_id, status, timeout_s, language?, parameters, spec?, schedule_id?, created_at, expires_at, sent_at?, started_at?, finished_at?}]}` newest first, scope-filtered |
 | GET /jobs/{id} | scripts.read | one job object |
 | GET /jobs/{id}/output | scripts.read | `{output, exit_code}` |
 
 Job statuses: `pending` (queued, device offline) → `sent` → terminal
 `succeeded`/`failed`/`timed_out`/`expired`. The worker sweeps queued
 jobs past `expires_at` to `expired`.
+
+## App deployment
+
+Install or remove OS packages (apt/dnf, chosen per host) as jobs. Uses the
+same dispatch pipeline, offline queue, and blast-radius 409 confirmation as
+script dispatch. Package names are validated server-side.
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| POST /apps/deploy | apps.deploy | `{operation: install\|remove, packages: [string], device_id? \| target, timeout_s?, expires_in_s?, confirm_token?}` → 201 `{job_ids, device_count}` (plus `job_id` for a single device) |
+
+Package jobs appear in `/jobs` with `kind` = `package_install`/`package_remove`
+and a `spec` of `{packages: [...]}` instead of a script.
+
+## Agent updates
+
+Signed auto-update. `agent_releases` is a **global** catalog (shared across
+tenants) of binaries the agent verifies (sha256 + a detached Ed25519
+signature against an embedded trusted key) before atomically swapping and
+restarting; a watchdog rolls back to the previous binary if the new one
+fails to reconnect. Rollouts and per-device update state are tenant-scoped.
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| GET /agent-releases?channel= | devices.read | `{releases: [{id, channel, version, os, arch, url, sha256, signature, size_bytes, notes, created_at}]}` newest first |
+| POST /agent-releases | agent.update | `{channel, version, os, arch, url, sha256, signature, size_bytes?, notes?}` → 201 `{id}` |
+| POST /agent-releases/{id}/rollout | agent.update | `{device_id? \| target, confirm_token?}` → 200 `{version, matched, online_offered}` |
+| GET /device-updates | devices.read | `{updates: [{device_id, version, phase, error?, offered_at, updated_at}]}` |
+| POST /devices/{id}/update-channel | devices.manage | `{channel: stable\|beta}` → 200 |
+
+Rollout offers the release only to targeted devices whose `os`/`arch` match
+it. Update phases (reported by the agent): `offered` → `downloading` →
+`verified` → `applied`, or `failed`/`rolled_back`. On `applied` the device's
+recorded `agent_version` advances. The release pipeline
+(`.github/workflows/release.yml`) builds, Ed25519-signs, and publishes
+binaries to a GitHub Release plus an `agent_releases.json` registration
+manifest.
 
 ## Schedules
 

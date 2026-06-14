@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,17 @@ import (
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
+
+// InstallPackages is not yet implemented on Windows (a winget/choco backend
+// lands in a later phase); package jobs report this as a failure.
+func InstallPackages(_ context.Context, _ []string) ([]byte, error) {
+	return nil, errors.New("package management is not yet supported on Windows")
+}
+
+// RemovePackages is not yet implemented on Windows.
+func RemovePackages(_ context.Context, _ []string) ([]byte, error) {
+	return nil, errors.New("package management is not yet supported on Windows")
+}
 
 // DefaultStateDir is where the device identity and command journal live.
 func DefaultStateDir() string {

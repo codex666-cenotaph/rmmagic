@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -215,6 +217,170 @@ func TestAPIIntegration(t *testing.T) {
 	testDeviceFlow(t, ts.URL, alpha, beta, siteID)
 	testScriptsFlow(t, ts.URL, alpha, beta, siteID)
 	testTargetsAndSchedulesFlow(t, ts.URL, alpha, beta, siteID, srv, appStore, priv)
+	testAppsAndUpdatesFlow(t, ts.URL, alpha, beta, siteID)
+}
+
+// testAppsAndUpdatesFlow exercises M6: package (apt/dnf) deploy jobs and the
+// signed auto-update rollout (offer over the channel, status back, device
+// version advance), plus update-channel changes and tenant isolation.
+func testAppsAndUpdatesFlow(t *testing.T, baseURL string, alpha, beta *client, siteID string) {
+	ctx := context.Background()
+
+	// Enroll and connect a Linux device.
+	tok := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 201)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrolled := newClient(t, baseURL).post(t, "/agent/v1/enroll", obj{
+		"token": tok["token"].(string), "hostname": "app-box", "os": "linux", "arch": "amd64",
+		"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+	}, 201)
+	deviceID := enrolled["device_id"].(string)
+
+	wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/agent/v1/connect"
+	ws, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close(websocket.StatusNormalClosure, "")
+	ch := wsRead(t, ctx, ws)
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_AuthResponse{AuthResponse: &rmmpb.AuthResponse{
+		DeviceId: deviceID, Signature: devicesig.SignChallenge(priv, ch.GetAuthChallenge().GetNonce())}}})
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_Hello{Hello: &rmmpb.Hello{
+		ProtocolVersion: 1, AgentVersion: "0.0.0-test", Os: "linux", Arch: "amd64", Hostname: "app-box"}}})
+	if wsRead(t, ctx, ws).GetHelloAck() == nil {
+		t.Fatal("expected hello ack")
+	}
+
+	// --- App deploy: a package install job uses the same dispatch path ---
+	job := alpha.post(t, "/api/v1/apps/deploy", obj{
+		"device_id": deviceID, "operation": "install", "packages": []string{"nginx", "curl"},
+	}, 201)
+	jobID := job["job_id"].(string)
+
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	var cmd *rmmpb.CommandRequest
+	for cmd == nil {
+		env, err := readEnvelope(rctx, ws)
+		if err != nil {
+			t.Fatalf("no package CommandRequest: %v", err)
+		}
+		cmd = env.GetCommandRequest()
+	}
+	cancel()
+	if cmd.Kind != rmmpb.CommandKind_COMMAND_KIND_PACKAGE_INSTALL {
+		t.Fatalf("expected PACKAGE_INSTALL kind, got %v", cmd.Kind)
+	}
+	if !strings.Contains(string(cmd.Spec), "nginx") {
+		t.Fatalf("package spec missing nginx: %s", cmd.Spec)
+	}
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{MessageId: "pkg-res", Payload: &rmmpb.Envelope_CommandResult{
+		CommandResult: &rmmpb.CommandResult{CommandId: cmd.CommandId,
+			Status: rmmpb.CommandStatus_COMMAND_STATUS_SUCCEEDED, Output: []byte("installed nginx")}}})
+
+	deadline := time.Now().Add(5 * time.Second)
+	var jobStatus string
+	for time.Now().Before(deadline) {
+		jobStatus = alpha.get(t, "/api/v1/jobs/"+jobID, 200)["status"].(string)
+		if jobStatus == "succeeded" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if jobStatus != "succeeded" {
+		t.Fatalf("package job should be succeeded, got %q", jobStatus)
+	}
+
+	// Validation: bad operation and shell-unsafe package names are rejected.
+	alpha.post(t, "/api/v1/apps/deploy", obj{"device_id": deviceID, "operation": "frob", "packages": []string{"x"}}, 400)
+	alpha.post(t, "/api/v1/apps/deploy", obj{"device_id": deviceID, "operation": "install", "packages": []string{"bad; rm -rf /"}}, 400)
+
+	// --- Signed release catalog + rollout ---
+	binary := []byte("pretend new agent binary bytes")
+	_, relPriv, _ := ed25519.GenerateKey(nil)
+	sum := sha256.Sum256(binary)
+	shaHex := hex.EncodeToString(sum[:])
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(relPriv, binary))
+	alpha.post(t, "/api/v1/agent-releases", obj{
+		"channel": "stable", "version": "9.9.9", "os": "linux", "arch": "amd64",
+		"url": "https://example.com/rmmagent-linux-amd64", "sha256": shaHex,
+		"signature": sig, "size_bytes": len(binary), "notes": "test release",
+	}, 201)
+	// Bad sha256 is rejected.
+	alpha.post(t, "/api/v1/agent-releases", obj{
+		"channel": "stable", "version": "9.9.10", "os": "linux", "arch": "amd64",
+		"url": "https://example.com/x", "sha256": "nothex", "signature": sig,
+	}, 400)
+
+	var relID string
+	for _, r := range alpha.get(t, "/api/v1/agent-releases?channel=stable", 200)["releases"].([]any) {
+		m := r.(map[string]any)
+		if m["version"] == "9.9.9" {
+			relID = m["id"].(string)
+		}
+	}
+	if relID == "" {
+		t.Fatal("created release not listed")
+	}
+
+	res := alpha.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 200)
+	if res["matched"].(float64) != 1 {
+		t.Fatalf("expected 1 matched device, got %v", res["matched"])
+	}
+
+	// The agent receives a signed UpdateOffer over the channel.
+	octx, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	var offer *rmmpb.UpdateOffer
+	for offer == nil {
+		env, err := readEnvelope(octx, ws)
+		if err != nil {
+			t.Fatalf("no UpdateOffer: %v", err)
+		}
+		offer = env.GetUpdateOffer()
+	}
+	cancel2()
+	if offer.Version != "9.9.9" || offer.Sha256 != shaHex {
+		t.Fatalf("unexpected offer: version=%q sha=%q", offer.Version, offer.Sha256)
+	}
+
+	// Agent reports the update applied; server advances the device version.
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{MessageId: "upd-1", Payload: &rmmpb.Envelope_UpdateStatus{
+		UpdateStatus: &rmmpb.UpdateStatus{Version: "9.9.9", Phase: rmmpb.UpdatePhase_UPDATE_PHASE_APPLIED}}})
+
+	deadline = time.Now().Add(5 * time.Second)
+	applied := false
+	for time.Now().Before(deadline) && !applied {
+		for _, u := range alpha.get(t, "/api/v1/device-updates", 200)["updates"].([]any) {
+			m := u.(map[string]any)
+			if m["device_id"] == deviceID && m["phase"] == "applied" {
+				applied = true
+			}
+		}
+		if !applied {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if !applied {
+		t.Fatal("device update phase did not reach applied")
+	}
+	if v := alpha.get(t, "/api/v1/devices/"+deviceID, 200)["agent_version"]; v != "9.9.9" {
+		t.Fatalf("agent_version not advanced after update: %v", v)
+	}
+
+	// --- update channel change ---
+	alpha.post(t, "/api/v1/devices/"+deviceID+"/update-channel", obj{"channel": "beta"}, 200)
+	if c := alpha.get(t, "/api/v1/devices/"+deviceID, 200)["update_channel"]; c != "beta" {
+		t.Fatalf("update_channel not changed: %v", c)
+	}
+
+	// --- tenant isolation: device_updates are tenant-scoped; rollout and
+	// channel changes against another tenant's device are blocked. ---
+	if n := len(beta.get(t, "/api/v1/device-updates", 200)["updates"].([]any)); n != 0 {
+		t.Fatalf("beta must see 0 device-updates, got %d", n)
+	}
+	beta.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 400)
+	beta.post(t, "/api/v1/devices/"+deviceID+"/update-channel", obj{"channel": "beta"}, 404)
 }
 
 // testDeviceFlow exercises M2: enrollment, gateway auth, heartbeat,

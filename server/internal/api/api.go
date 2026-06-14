@@ -114,6 +114,14 @@ func (s *Server) Routes() []Route {
 		{Method: "DELETE", Pattern: "/api/v1/scripts/{id}", Perm: auth.PermScriptsManage, Handler: s.handleArchiveScript},
 		{Method: "POST", Pattern: "/api/v1/scripts/{id}/dispatch", Perm: auth.PermScriptsExecute, Handler: s.handleDispatchJob},
 
+		{Method: "POST", Pattern: "/api/v1/apps/deploy", Perm: auth.PermAppsDeploy, Handler: s.handleDeployApp},
+
+		{Method: "GET", Pattern: "/api/v1/agent-releases", Perm: auth.PermDevicesRead, Handler: s.handleListReleases},
+		{Method: "POST", Pattern: "/api/v1/agent-releases", Perm: auth.PermAgentUpdate, Handler: s.handleCreateRelease},
+		{Method: "POST", Pattern: "/api/v1/agent-releases/{id}/rollout", Perm: auth.PermAgentUpdate, Handler: s.handleRolloutRelease},
+		{Method: "GET", Pattern: "/api/v1/device-updates", Perm: auth.PermDevicesRead, Handler: s.handleListDeviceUpdates},
+		{Method: "POST", Pattern: "/api/v1/devices/{id}/update-channel", Perm: auth.PermDevicesManage, Handler: s.handleSetDeviceUpdateChannel},
+
 		{Method: "GET", Pattern: "/api/v1/jobs", Perm: auth.PermScriptsRead, Handler: s.handleListJobs},
 		{Method: "GET", Pattern: "/api/v1/jobs/{id}", Perm: auth.PermScriptsRead, Handler: s.handleGetJob},
 		{Method: "GET", Pattern: "/api/v1/jobs/{id}/output", Perm: auth.PermScriptsRead, Handler: s.handleGetJobOutput},

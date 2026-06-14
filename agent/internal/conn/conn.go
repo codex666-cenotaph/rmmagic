@@ -29,6 +29,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/collect"
 	agentexec "github.com/codex666-cenotaph/rmmagic/agent/internal/exec"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/identity"
+	"github.com/codex666-cenotaph/rmmagic/agent/internal/update"
 	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
 	rmmpb "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/rmm/v1"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
@@ -93,25 +94,31 @@ func Enroll(ctx context.Context, serverURL, token, stateDir string) error {
 
 // Agent is the running connection manager.
 type Agent struct {
-	ID      *identity.Identity
-	Key     ed25519.PrivateKey
-	Log     *slog.Logger
-	HTTP    *http.Client
-	Journal *agentexec.Journal
+	ID       *identity.Identity
+	Key      ed25519.PrivateKey
+	Log      *slog.Logger
+	HTTP     *http.Client
+	Journal  *agentexec.Journal
+	StateDir string
+	// Restart replaces the running process so a newly-swapped binary takes
+	// over (systemd Restart=always re-launches). Overridable for tests.
+	Restart func()
 }
 
-func NewAgent(id *identity.Identity, log *slog.Logger, journal *agentexec.Journal) (*Agent, error) {
+func NewAgent(id *identity.Identity, log *slog.Logger, journal *agentexec.Journal, stateDir string) (*Agent, error) {
 	key, err := id.PrivateKey()
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{ID: id, Key: key, Log: log, Journal: journal,
-		HTTP: &http.Client{Timeout: 30 * time.Second}}, nil
+	return &Agent{ID: id, Key: key, Log: log, Journal: journal, StateDir: stateDir,
+		HTTP:    &http.Client{Timeout: 30 * time.Second},
+		Restart: func() { os.Exit(0) }}, nil
 }
 
 // Run maintains the gateway connection and the stats loop until ctx is
 // done or the device is decommissioned.
 func (a *Agent) Run(ctx context.Context) error {
+	a.startUpdateWatchdog(ctx)
 	go a.statsLoop(ctx)
 	go a.inventoryLoop(ctx)
 
@@ -204,6 +211,13 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	a.Log.Info("connected", "heartbeat_interval", interval.String())
 
+	// Reaching an authenticated session is the health signal for a freshly
+	// applied update: commit to the new binary and drop the .prev fallback.
+	if _, pending := update.PendingMarker(a.StateDir); pending {
+		a.Log.Info("update health check passed; confirming new binary")
+		update.ConfirmHealthy(a.StateDir)
+	}
+
 	// Heartbeat writer.
 	hbCtx, stopHB := context.WithCancel(ctx)
 	defer stopHB()
@@ -234,6 +248,8 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 			return ErrDecommissioned
 		case *rmmpb.Envelope_CommandRequest:
 			go a.executeCommand(ctx, ws, p.CommandRequest)
+		case *rmmpb.Envelope_UpdateOffer:
+			go a.handleUpdateOffer(ctx, ws, p.UpdateOffer)
 		}
 	}
 }
@@ -356,6 +372,16 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 		} else {
 			result = agentexec.RunScript(ctx, spec, req.TimeoutS)
 		}
+	} else if req.Kind == rmmpb.CommandKind_COMMAND_KIND_PACKAGE_INSTALL ||
+		req.Kind == rmmpb.CommandKind_COMMAND_KIND_PACKAGE_REMOVE {
+		spec, err := agentexec.ParsePackageSpec(req.Spec)
+		if err != nil {
+			a.Log.Error("bad package spec", "command_id", req.CommandId, "error", err)
+			result = agentexec.Result{Output: []byte("bad spec: " + err.Error())}
+		} else {
+			install := req.Kind == rmmpb.CommandKind_COMMAND_KIND_PACKAGE_INSTALL
+			result = agentexec.RunPackage(ctx, spec, install, req.TimeoutS)
+		}
 	} else {
 		result = agentexec.Result{Output: []byte("unsupported command kind")}
 	}
@@ -464,6 +490,109 @@ func (a *Agent) uploadInventory(ctx context.Context) error {
 	}
 	a.Log.Info("inventory uploaded", "packages", len(pkgs), "services", len(svcs))
 	return nil
+}
+
+// handleUpdateOffer downloads, verifies, and applies a signed release the
+// server offered, reporting each phase back over the channel. The binary is
+// only swapped after both the sha256 and an Ed25519 signature from an
+// embedded trusted key verify; the running process then restarts into it.
+func (a *Agent) handleUpdateOffer(ctx context.Context, ws *websocket.Conn, offer *rmmpb.UpdateOffer) {
+	if offer == nil || offer.Version == "" {
+		return
+	}
+	if offer.Version == version.Version {
+		a.Log.Info("update offer for current version; ignoring", "version", offer.Version)
+		return
+	}
+	a.Log.Info("update offered", "version", offer.Version)
+
+	keys, err := update.TrustedKeys()
+	if err != nil || len(keys) == 0 {
+		a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_FAILED,
+			"no trusted update keys embedded")
+		return
+	}
+	selfPath, err := os.Executable()
+	if err != nil {
+		a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_FAILED,
+			"cannot resolve executable path: "+err.Error())
+		return
+	}
+
+	a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_DOWNLOADING, "")
+	// Downloads may be large; use a dedicated long-timeout client rather
+	// than the short-lived stats/inventory one.
+	dlCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	data, err := update.Download(dlCtx, &http.Client{Timeout: 15 * time.Minute}, offer.Url)
+	if err != nil {
+		a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_FAILED,
+			"download failed: "+err.Error())
+		return
+	}
+
+	sig := base64.StdEncoding.EncodeToString(offer.Signature)
+	if err := update.Verify(data, offer.Sha256, sig, keys); err != nil {
+		a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_FAILED,
+			"verification failed: "+err.Error())
+		return
+	}
+	a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_VERIFIED, "")
+
+	if err := update.Apply(a.StateDir, selfPath, data, offer.Version); err != nil {
+		a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_FAILED,
+			"apply failed: "+err.Error())
+		return
+	}
+	a.sendUpdateStatus(ctx, ws, offer.Version, rmmpb.UpdatePhase_UPDATE_PHASE_APPLIED, "")
+	a.Log.Info("update applied; restarting into new binary", "version", offer.Version)
+	// Give the APPLIED frame a moment to flush before the process restarts.
+	time.Sleep(500 * time.Millisecond)
+	a.Restart()
+}
+
+func (a *Agent) sendUpdateStatus(ctx context.Context, ws *websocket.Conn, ver string, phase rmmpb.UpdatePhase, errMsg string) {
+	_ = write(ctx, ws, &rmmpb.Envelope{
+		MessageId: uuid.NewString(),
+		Payload: &rmmpb.Envelope_UpdateStatus{UpdateStatus: &rmmpb.UpdateStatus{
+			Version: ver,
+			Phase:   phase,
+			Error:   errMsg,
+		}},
+	})
+}
+
+// startUpdateWatchdog rolls back to the previous binary if a freshly
+// applied update fails to reach a healthy (connected) state before its
+// deadline. ConfirmHealthy (on connect) cancels this by clearing the
+// marker. Only runs when an update is actually pending.
+func (a *Agent) startUpdateWatchdog(ctx context.Context) {
+	m, pending := update.PendingMarker(a.StateDir)
+	if !pending {
+		return
+	}
+	wait := time.Until(m.Deadline)
+	if wait < 0 {
+		wait = 0
+	}
+	a.Log.Warn("update pending health confirmation; watchdog armed",
+		"version", m.Version, "deadline", m.Deadline)
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if _, still := update.PendingMarker(a.StateDir); !still {
+			return // confirmed healthy in the meantime
+		}
+		a.Log.Error("update did not become healthy in time; rolling back", "version", m.Version)
+		if err := update.Rollback(a.StateDir); err != nil {
+			a.Log.Error("rollback failed", "error", err)
+			return
+		}
+		a.Restart()
+	}()
 }
 
 func read(ctx context.Context, ws *websocket.Conn) (*rmmpb.Envelope, error) {

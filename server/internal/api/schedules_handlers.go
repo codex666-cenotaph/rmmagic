@@ -174,7 +174,7 @@ func (s *Server) upsertSchedule(w http.ResponseWriter, r *http.Request, id uuid.
 		if sc.ArchivedAt != nil {
 			return store.ErrNotFound
 		}
-		devices, err := resolveAuthorizedTarget(ctx, tx, req.Target)
+		devices, err := resolveAuthorizedTarget(ctx, tx, req.Target, auth.PermScriptsExecute)
 		if err != nil {
 			return err
 		}
