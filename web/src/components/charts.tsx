@@ -157,18 +157,18 @@ export function BarRows({
 
 // Shared chart palette (semantic CSS variables defined in styles.css).
 export const CHART = {
-  online: "var(--ok)",
-  offline: "var(--muted-2)",
-  decommissioned: "var(--error)",
+  online: "#2d2d2d",
+  offline: "#a0aec0",
+  decommissioned: "#707070",
   warning: "var(--warn)",
   critical: "var(--error)",
-  accent: "var(--accent)",
+  accent: "#2d2d2d",
   series: [
-    "var(--accent)",
-    "var(--chart-2)",
-    "var(--chart-3)",
-    "var(--chart-4)",
-    "var(--chart-5)",
-    "var(--chart-6)",
+    "#1a1a1a",
+    "#4a4a4a",
+    "#707070",
+    "#a0aec0",
+    "#3a3a3a",
+    "#606060",
   ],
 };
