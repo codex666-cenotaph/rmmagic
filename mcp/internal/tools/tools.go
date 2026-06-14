@@ -17,14 +17,22 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/mcp/internal/rmm"
 )
 
-// Register adds every rmmagic tool to s, backed by client.
-func Register(s *mcp.Server, client *rmm.Client) {
-	r := registrar{s: s, c: client}
+// ClientFor resolves the REST client for a single tool call. It returns
+// an error when the request carries no usable credential, which the tool
+// layer surfaces to the agent. The factory indirection lets one tool set
+// serve both transports: stdio binds a fixed token, while HTTP builds a
+// client from each request's bearer token.
+type ClientFor func(ctx context.Context) (*rmm.Client, error)
+
+// Register adds every rmmagic tool to s, resolving the REST client per
+// call via clientFor.
+func Register(s *mcp.Server, clientFor ClientFor) {
+	r := registrar{s: s, clientFor: clientFor}
 
 	// --- Organization ---
 	r.read("rmm_list_customers", "List all customers (organizations) in the tenant.",
 		nil, func(ctx context.Context, a args) (json.RawMessage, error) {
-			return r.c.Do(ctx, "GET", "/api/v1/customers", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/customers", nil, nil)
 		})
 	r.read("rmm_list_sites", "List the sites belonging to a customer.",
 		props{"customer_id": strProp("Customer UUID.")}, []string{"customer_id"},
@@ -33,13 +41,13 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/customers/"+id+"/sites", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/customers/"+id+"/sites", nil, nil)
 		})
 
 	// --- Devices ---
 	r.read("rmm_list_devices", "List all devices (endpoints) the token can see, with status, OS, tags and online state.",
 		nil, func(ctx context.Context, a args) (json.RawMessage, error) {
-			return r.c.Do(ctx, "GET", "/api/v1/devices", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/devices", nil, nil)
 		})
 	r.read("rmm_get_device", "Get a single device by ID.",
 		props{"device_id": strProp("Device UUID.")}, []string{"device_id"},
@@ -48,7 +56,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/devices/"+id, nil, nil)
+			return r.do(ctx, "GET", "/api/v1/devices/"+id, nil, nil)
 		})
 	r.read("rmm_get_device_stats", "Get time-series resource stats (CPU, memory, disk) for a device. Defaults to the last hour.",
 		props{
@@ -63,7 +71,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			}
 			q := url.Values{}
 			a.setQuery(q, "since", "until")
-			return r.c.Do(ctx, "GET", "/api/v1/devices/"+id+"/stats", q, nil)
+			return r.do(ctx, "GET", "/api/v1/devices/"+id+"/stats", q, nil)
 		})
 	r.read("rmm_get_device_inventory", "Get hardware, installed-package and service inventory for a device.",
 		props{"device_id": strProp("Device UUID.")}, []string{"device_id"},
@@ -72,7 +80,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/devices/"+id+"/inventory", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/devices/"+id+"/inventory", nil, nil)
 		})
 	r.read("rmm_get_effective_policy", "Get the effective (merged) policy applied to a device.",
 		props{"device_id": strProp("Device UUID.")}, []string{"device_id"},
@@ -81,7 +89,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/devices/"+id+"/effective-policy", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/devices/"+id+"/effective-policy", nil, nil)
 		})
 	r.write("rmm_set_device_tags", "Replace the tag set on a device (lower-case, 1-32 chars of a-z/0-9/-/_, max 20). Requires devices.manage.",
 		props{
@@ -101,7 +109,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "PUT", "/api/v1/devices/"+id+"/tags", nil, map[string]any{"tags": tags})
+			return r.do(ctx, "PUT", "/api/v1/devices/"+id+"/tags", nil, map[string]any{"tags": tags})
 		})
 
 	// --- Scripts & jobs ---
@@ -112,7 +120,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if a.boolVal("archived") {
 				q.Set("archived", "true")
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/scripts", q, nil)
+			return r.do(ctx, "GET", "/api/v1/scripts", q, nil)
 		})
 	r.read("rmm_get_script", "Get a script's details including its body.",
 		props{"script_id": strProp("Script UUID.")}, []string{"script_id"},
@@ -121,7 +129,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/scripts/"+id, nil, nil)
+			return r.do(ctx, "GET", "/api/v1/scripts/"+id, nil, nil)
 		})
 	r.write("rmm_dispatch_script",
 		"Run a script on one device. Returns the created job ID(s). Requires scripts.execute. "+
@@ -153,14 +161,14 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if t := a.strVal("confirm_token"); t != "" {
 				body["confirm_token"] = t
 			}
-			return r.c.Do(ctx, "POST", "/api/v1/scripts/"+id+"/dispatch", nil, body)
+			return r.do(ctx, "POST", "/api/v1/scripts/"+id+"/dispatch", nil, body)
 		})
 	r.read("rmm_list_jobs", "List recent script jobs, optionally filtered by device.",
 		props{"device_id": strProp("Filter to a single device UUID (optional).")}, nil,
 		func(ctx context.Context, a args) (json.RawMessage, error) {
 			q := url.Values{}
 			a.setQuery(q, "device_id")
-			return r.c.Do(ctx, "GET", "/api/v1/jobs", q, nil)
+			return r.do(ctx, "GET", "/api/v1/jobs", q, nil)
 		})
 	r.read("rmm_get_job", "Get a job's status and metadata.",
 		props{"job_id": strProp("Job UUID.")}, []string{"job_id"},
@@ -169,7 +177,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/jobs/"+id, nil, nil)
+			return r.do(ctx, "GET", "/api/v1/jobs/"+id, nil, nil)
 		})
 	r.read("rmm_get_job_output", "Get a finished job's stdout/stderr output and exit code.",
 		props{"job_id": strProp("Job UUID.")}, []string{"job_id"},
@@ -178,17 +186,17 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/jobs/"+id+"/output", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/jobs/"+id+"/output", nil, nil)
 		})
 
 	// --- Schedules & policies ---
 	r.read("rmm_list_schedules", "List recurring script schedules.",
 		nil, func(ctx context.Context, a args) (json.RawMessage, error) {
-			return r.c.Do(ctx, "GET", "/api/v1/schedules", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/schedules", nil, nil)
 		})
 	r.read("rmm_list_policies", "List monitoring/configuration policies.",
 		nil, func(ctx context.Context, a args) (json.RawMessage, error) {
-			return r.c.Do(ctx, "GET", "/api/v1/policies", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/policies", nil, nil)
 		})
 
 	// --- Alerts ---
@@ -204,7 +212,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if n := a.intVal("limit"); n > 0 {
 				q.Set("limit", fmt.Sprintf("%d", n))
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/alerts", q, nil)
+			return r.do(ctx, "GET", "/api/v1/alerts", q, nil)
 		})
 	r.read("rmm_get_alert", "Get a single alert by ID.",
 		props{"alert_id": strProp("Alert UUID.")}, []string{"alert_id"},
@@ -213,7 +221,7 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "GET", "/api/v1/alerts/"+id, nil, nil)
+			return r.do(ctx, "GET", "/api/v1/alerts/"+id, nil, nil)
 		})
 	r.write("rmm_ack_alert", "Acknowledge an alert. Requires alerts.manage.",
 		props{"alert_id": strProp("Alert UUID.")}, []string{"alert_id"},
@@ -222,21 +230,30 @@ func Register(s *mcp.Server, client *rmm.Client) {
 			if err != nil {
 				return nil, err
 			}
-			return r.c.Do(ctx, "POST", "/api/v1/alerts/"+id+"/ack", nil, nil)
+			return r.do(ctx, "POST", "/api/v1/alerts/"+id+"/ack", nil, nil)
 		})
 
 	// --- Audit ---
 	r.read("rmm_list_audit", "List recent audit-log entries. Requires audit.read.",
 		nil, func(ctx context.Context, a args) (json.RawMessage, error) {
-			return r.c.Do(ctx, "GET", "/api/v1/audit", nil, nil)
+			return r.do(ctx, "GET", "/api/v1/audit", nil, nil)
 		})
 }
 
 // registrar wires tool handlers to an mcp.Server, rendering each handler's
 // JSON result as pretty-printed text content.
 type registrar struct {
-	s *mcp.Server
-	c *rmm.Client
+	s         *mcp.Server
+	clientFor ClientFor
+}
+
+// do resolves the REST client for this call and performs the request.
+func (r registrar) do(ctx context.Context, method, path string, query url.Values, body any) (json.RawMessage, error) {
+	c, err := r.clientFor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.Do(ctx, method, path, query, body)
 }
 
 type handlerFunc func(ctx context.Context, a args) (json.RawMessage, error)

@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { logout } from "./api/client";
 import { useAuth } from "./auth";
 import { useTheme } from "./theme";
+import { Assistant } from "./components/Assistant";
 import {
   AlertsIcon,
   AuditIcon,
@@ -190,6 +191,7 @@ export function AppShell() {
       {navOpen && (
         <div className="nav-scrim" onClick={() => setNavOpen(false)} />
       )}
+      <Assistant />
     </div>
   );
 }

@@ -33,6 +33,29 @@ func New(baseURL, token string) *Client {
 	}
 }
 
+// --- per-request token plumbing ---
+//
+// The stdio transport authenticates with one token from the environment;
+// the HTTP transport authenticates each request with its own bearer
+// token. Carrying the token in the context lets one tool set serve both:
+// the transport stashes the token, and the client factory reads it.
+
+type ctxKey int
+
+const ctxToken ctxKey = iota
+
+// WithToken returns a context carrying the API token for downstream
+// client construction.
+func WithToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, ctxToken, token)
+}
+
+// TokenFrom returns the API token stored on the context, or "" if none.
+func TokenFrom(ctx context.Context) string {
+	t, _ := ctx.Value(ctxToken).(string)
+	return t
+}
+
 // APIError is returned when the API responds with a non-2xx status. It
 // carries the HTTP status and the server's error message verbatim.
 type APIError struct {

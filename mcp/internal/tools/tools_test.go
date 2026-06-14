@@ -12,9 +12,17 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/mcp/internal/rmm"
 )
 
+// fixedClient returns a ClientFor that always uses the given base URL and
+// a test token.
+func fixedClient(baseURL string) ClientFor {
+	return func(context.Context) (*rmm.Client, error) {
+		return rmm.New(baseURL, "rmm_x"), nil
+	}
+}
+
 func TestRegisterAdvertisesToolsOverProtocol(t *testing.T) {
 	s := mcp.NewServer("rmmagic", "test")
-	Register(s, rmm.New("http://example.invalid", "rmm_x"))
+	Register(s, fixedClient("http://example.invalid"))
 
 	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}` + "\n")
 	var out strings.Builder
@@ -40,7 +48,7 @@ func TestDispatchScriptValidatesUUIDClientSide(t *testing.T) {
 	defer srv.Close()
 
 	s := mcp.NewServer("rmmagic", "test")
-	Register(s, rmm.New(srv.URL, "rmm_x"))
+	Register(s, fixedClient(srv.URL))
 
 	// device_id is not a UUID: should fail before any HTTP call.
 	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":` +
@@ -70,7 +78,7 @@ func TestListDevicesCallsEndpoint(t *testing.T) {
 	defer srv.Close()
 
 	s := mcp.NewServer("rmmagic", "test")
-	Register(s, rmm.New(srv.URL, "rmm_x"))
+	Register(s, fixedClient(srv.URL))
 
 	req := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rmm_list_devices","arguments":{}}}`
 	var out strings.Builder

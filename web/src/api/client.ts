@@ -673,6 +673,29 @@ export const updateChannel = (id: string, body: ChannelBody) =>
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
 
+// ---- AI Assistant ----
+
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantToolCall {
+  name: string;
+  input: unknown;
+}
+
+export interface AssistantReply {
+  reply: string;
+  tool_calls: AssistantToolCall[] | null;
+}
+
+// chatAssistant sends the running conversation and returns the assistant's
+// next reply plus the tools it invoked. The server is stateless — pass the
+// full message history each call.
+export const chatAssistant = (messages: AssistantMessage[]) =>
+  request<AssistantReply>("POST", "/assistant/chat", { messages });
+
 // ---- Audit ----
 
 export const listAudit = (params: { limit?: number; before?: string }) => {

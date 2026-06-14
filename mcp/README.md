@@ -12,26 +12,59 @@ what an agent can read or do. Mint a narrowly-scoped, read-only token if
 you only want the agent to observe; grant `scripts.execute`,
 `devices.manage`, or `alerts.manage` only when you want it to act.
 
-## Configuration
+## Transports
 
-Set two environment variables:
+`rmmmcp` speaks MCP over two transports:
+
+- **stdio (default)** — a local subprocess an MCP client spawns and talks to
+  over stdin/stdout (Claude Desktop, Claude Code, the Agent SDK). It
+  authenticates with a single token from `RMM_MCP_TOKEN`.
+- **HTTP (`--http ADDR`)** — a remote/network MCP server (Streamable HTTP
+  transport at `POST /mcp`) that web-based agents and connectors reach over
+  the network. It holds **no shared credential**: each request authenticates
+  itself with the caller's `rmm_...` token in the `Authorization: Bearer`
+  header, which is forwarded to the API. This is multi-tenant safe.
+
+## Configuration
 
 | Variable | Meaning |
 |---|---|
-| `RMM_MCP_SERVER_URL` | Base URL of the rmmagic server, e.g. `https://rmm.example.com` |
-| `RMM_MCP_TOKEN` | A rmmagic API token (`rmm_...`), created on the dashboard's API Tokens page |
+| `RMM_MCP_SERVER_URL` | Base URL of the rmmagic server, e.g. `https://rmm.example.com`. Required. |
+| `RMM_MCP_TOKEN` | A rmmagic API token (`rmm_...`). Required for **stdio**; ignored for HTTP (each request carries its own). |
 
-Logs go to stderr; stdout carries the JSON-RPC stream.
+Logs go to stderr; on stdio, stdout carries the JSON-RPC stream.
 
 ## Build & run
 
 ```sh
 go -C mcp build -o rmmmcp ./cmd/rmmmcp
 
+# stdio (local client spawns it)
 RMM_MCP_SERVER_URL=https://rmm.example.com \
 RMM_MCP_TOKEN=rmm_xxxxxxxx \
   ./rmmmcp
+
+# remote HTTP server (web agents / connectors reach it over the network)
+RMM_MCP_SERVER_URL=https://rmm.example.com \
+  ./rmmmcp --http :9090
 ```
+
+### Remote HTTP transport
+
+The HTTP server exposes a single endpoint, `POST /mcp`, that accepts JSON-RPC
+2.0 messages (single or batched) and returns JSON-RPC responses; `initialize`
+returns an `Mcp-Session-Id` header. Point an MCP client that supports remote
+servers at the URL and have it send the rmmagic API token as a bearer token:
+
+```sh
+curl -s -X POST https://rmm.example.com:9090/mcp \
+  -H 'Authorization: Bearer rmm_xxxxxxxx' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"rmm_list_devices","arguments":{}}}'
+```
+
+Put it behind TLS (a reverse proxy or load balancer) for production use.
 
 ## Client configuration
 
