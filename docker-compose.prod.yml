@@ -45,6 +45,12 @@ services:
       RMM_DATABASE_URL: "postgres://rmm:${POSTGRES_PASSWORD}@postgres:5432/rmm?sslmode=disable"
       RMM_MASTER_KEY: ${RMM_MASTER_KEY}
       RMM_COOKIE_SECURE: ${RMM_COOKIE_SECURE:-true}
+      # Remote-shell recordings persist in MinIO (bucket auto-created).
+      RMM_S3_ENDPOINT: "minio:9000"
+      RMM_S3_BUCKET: "rmm-recordings"
+      RMM_S3_ACCESS_KEY: "rmm"
+      RMM_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      RMM_S3_USE_SSL: "false"
     depends_on:
       postgres:
         condition: service_healthy

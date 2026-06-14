@@ -133,6 +133,26 @@ firing creates one job per active device in the target and is audited as
 `schedule.run` (actor `system`). Missed firings (worker down) are not
 replayed; the next run is computed from the current time.
 
+## Remote shell
+
+Interactive PTY sessions, bridged browser ⇄ server ⇄ agent over the
+existing gateway connection. The live channel is a WebSocket; every
+session is recorded (asciinema v2 cast) to object storage and audited
+(`shell.start` / `shell.end`). Requires `shell.connect` at the device's
+site scope; the agent runs the shell with its own (root) privileges.
+
+| Method/Path | Permission | Notes |
+|---|---|---|
+| GET /devices/{id}/shell?cols=&rows= | shell.connect | **WebSocket.** Binary frames carry terminal I/O; client→server text frames are control (`{"type":"resize","cols","rows"}`), server→client text frames are `{"type":"exit"}` / `{"type":"error","message"}`. 409 if the device is offline/inactive. |
+| GET /devices/{id}/shell-sessions?limit= | shell.connect | `{sessions: [{id, device_id, hostname, status, cols, rows, bytes_in, bytes_out, has_recording, error?, started_at, ended_at}]}` newest first |
+| GET /shell-sessions/{id} | shell.connect | one session object |
+| GET /shell-sessions/{id}/recording | shell.connect | the raw asciinema cast (`application/x-asciicast`); 404 when no recording |
+
+Session `status`: `active` → terminal `closed` / `error`. Recordings are
+stored on the filesystem by default (`RMM_RECORDINGS_DIR`) or in S3/MinIO
+when `RMM_S3_ENDPOINT` is set; if no backend is available the session
+still runs but is not recorded.
+
 ## Audit log
 
 | Method/Path | Permission | Response |

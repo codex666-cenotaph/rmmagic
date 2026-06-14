@@ -29,6 +29,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/api"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/recordings"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
@@ -51,6 +52,18 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitCSV parses a comma-separated list, trimming spaces and dropping
+// empties.
+func splitCSV(v string) []string {
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func openStore(ctx context.Context, log *slog.Logger, appRole string) *store.Store {
@@ -146,6 +159,14 @@ func runServe(log *slog.Logger) {
 			cookieSecure := envOr("RMM_COOKIE_SECURE", "true") != "false"
 			srv := api.NewServer(st, box, log, cookieSecure)
 			srv.Gateway = gw
+			if recStore, err := recordings.Open(ctx, recordings.ConfigFromEnv()); err != nil {
+				log.Warn("shell recordings disabled", "error", err)
+			} else {
+				srv.Recordings = recStore
+			}
+			if v := os.Getenv("RMM_ALLOWED_WS_ORIGINS"); v != "" {
+				srv.WSOrigins = splitCSV(v)
+			}
 			mux.Handle("/api/v1/", srv.Handler())
 			mux.Handle("/agent/v1/enroll", srv.Handler())
 			mux.Handle("/agent/v1/stats", srv.Handler())

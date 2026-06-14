@@ -1133,3 +1133,48 @@ button.tab.active {
     display: none;
   }
 }
+
+/* --- Remote shell (M5) --- */
+.terminal-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #0b0f17;
+  margin-top: 0.75rem;
+}
+.terminal-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.terminal-status .terminal-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.terminal-status.open .terminal-dot {
+  background: var(--ok);
+}
+.terminal-status.error .terminal-dot,
+.terminal-status.closed .terminal-dot {
+  background: var(--error);
+}
+.terminal-host {
+  height: 460px;
+  padding: 0.5rem;
+}
+.terminal-host .xterm {
+  height: 100%;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}

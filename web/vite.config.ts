@@ -5,8 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/api": "http://localhost:8080",
-      "/agent": "http://localhost:8080",
+      // ws: true so the remote-shell WebSocket upgrade is proxied too.
+      "/api": { target: "http://localhost:8080", ws: true },
+      "/agent": { target: "http://localhost:8080", ws: true },
     },
   },
 });

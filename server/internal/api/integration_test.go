@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,12 +22,14 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp/totp"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/recordings"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
@@ -880,4 +883,266 @@ func (c *client) get(t *testing.T, path string, want int) obj {
 func (c *client) post(t *testing.T, path string, body any, want int) obj {
 	t.Helper()
 	return c.req(t, "POST", path, body, want)
+}
+
+// cookieHeader returns the client's stored cookies as a WebSocket dial
+// header (the WS client does not share the http.Client's jar).
+func (c *client) cookieHeader(t *testing.T) http.Header {
+	t.Helper()
+	u, err := url.Parse(c.base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := http.Header{}
+	for _, ck := range c.http.Jar.Cookies(u) {
+		h.Add("Cookie", ck.String())
+	}
+	return h
+}
+
+// TestShellIntegration drives the full remote-shell bridge end to end:
+// browser WebSocket <-> server <-> gateway <-> agent, with recording,
+// audit, and cross-tenant isolation. Skipped unless RMM_TEST_DATABASE_URL
+// is set.
+func TestShellIntegration(t *testing.T) {
+	dsn := os.Getenv("RMM_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("RMM_TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+
+	priv, err := store.Open(ctx, dsn, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer priv.Close()
+	applyMigrations(t, ctx, priv)
+
+	if _, err := bootstrap.Run(ctx, priv, bootstrap.Input{
+		TenantName: "Shell Alpha", Slug: "shell-alpha", Email: "owner@shell-alpha.test", Password: "shell-alpha-pass-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bootstrap.Run(ctx, priv, bootstrap.Input{
+		TenantName: "Shell Beta", Slug: "shell-beta", Email: "owner@shell-beta.test", Password: "shell-beta-pass-12"}); err != nil {
+		t.Fatal(err)
+	}
+
+	appStore, err := store.Open(ctx, dsn, "rmm_app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer appStore.Close()
+
+	box, err := secrets.NewBox(strings.Repeat("0badc0de", 8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recStore, err := recordings.Open(ctx, recordings.Config{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := NewServer(appStore, box, discard, false)
+	gw := gateway.New(appStore, discard)
+	srv.Gateway = gw
+	srv.Recordings = recStore
+
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/", srv.Handler())
+	mux.Handle("/agent/v1/enroll", srv.Handler())
+	mux.HandleFunc("GET /agent/v1/connect", gw.HandleConnect)
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	baseURL := ts.URL
+
+	alpha := newClient(t, baseURL)
+	beta := newClient(t, baseURL)
+	alpha.post(t, "/api/v1/auth/login", obj{"email": "owner@shell-alpha.test", "password": "shell-alpha-pass-1"}, 200)
+	beta.post(t, "/api/v1/auth/login", obj{"email": "owner@shell-beta.test", "password": "shell-beta-pass-12"}, 200)
+
+	cust := alpha.post(t, "/api/v1/customers", obj{"name": "Shell Co"}, 201)
+	site := alpha.post(t, "/api/v1/customers/"+cust["id"].(string)+"/sites", obj{"name": "Lab"}, 201)
+	siteID := site["id"].(string)
+
+	enroll := func(hostname string) (string, ed25519.PrivateKey) {
+		tok := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 201)
+		pub, key, err := ed25519.GenerateKey(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp := newClient(t, baseURL).post(t, "/agent/v1/enroll", obj{
+			"token": tok["token"].(string), "hostname": hostname, "os": "linux", "arch": "amd64",
+			"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+		}, 201)
+		return resp["device_id"].(string), key
+	}
+
+	wsURLBase := strings.Replace(baseURL, "http://", "ws://", 1)
+
+	// --- offline device: shell connect is refused before any upgrade ---
+	offlineID, _ := enroll("offline-box")
+	alpha.get(t, "/api/v1/devices/"+offlineID+"/shell", 409)
+
+	// --- connect an agent and authenticate it ---
+	deviceID, devKey := enroll("shell-box")
+	agentWs, _, err := websocket.Dial(ctx, wsURLBase+"/agent/v1/connect", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer agentWs.Close(websocket.StatusNormalClosure, "")
+	challenge := wsRead(t, ctx, agentWs)
+	wsWrite(t, ctx, agentWs, &rmmpb.Envelope{Payload: &rmmpb.Envelope_AuthResponse{
+		AuthResponse: &rmmpb.AuthResponse{DeviceId: deviceID, Signature: devicesig.SignChallenge(devKey, challenge.GetAuthChallenge().GetNonce())},
+	}})
+	wsWrite(t, ctx, agentWs, &rmmpb.Envelope{Payload: &rmmpb.Envelope_Hello{Hello: &rmmpb.Hello{
+		ProtocolVersion: 1, AgentVersion: "0.0.0-test", Os: "linux", Arch: "amd64", Hostname: "shell-box",
+	}}})
+	if wsRead(t, ctx, agentWs).GetHelloAck() == nil {
+		t.Fatal("expected hello ack")
+	}
+	// Give the gateway a moment to register the connection.
+	waitFor(t, func() bool { return gw.Online(uuid.MustParse(deviceID)) }, 3*time.Second, "agent registration")
+
+	// Agent responder: greet on ShellStart, echo the first input, then end
+	// the session. Runs on its own goroutine, so it must not call t.Fatal.
+	agentCtx, cancelAgent := context.WithCancel(context.Background())
+	defer cancelAgent()
+	go func() {
+		var sid string
+		for {
+			env, err := readEnvelope(agentCtx, agentWs)
+			if err != nil {
+				return
+			}
+			switch p := env.Payload.(type) {
+			case *rmmpb.Envelope_ShellStart:
+				sid = p.ShellStart.GetSessionId()
+				_ = rawWSWrite(agentCtx, agentWs, &rmmpb.Envelope{Payload: &rmmpb.Envelope_ShellOutput{
+					ShellOutput: &rmmpb.ShellData{SessionId: sid, Data: []byte("AGENT_READY\n")}}})
+			case *rmmpb.Envelope_ShellInput:
+				_ = rawWSWrite(agentCtx, agentWs, &rmmpb.Envelope{Payload: &rmmpb.Envelope_ShellOutput{
+					ShellOutput: &rmmpb.ShellData{SessionId: sid, Data: append([]byte("ECHO:"), p.ShellInput.GetData()...)}}})
+				_ = rawWSWrite(agentCtx, agentWs, &rmmpb.Envelope{Payload: &rmmpb.Envelope_ShellStop{
+					ShellStop: &rmmpb.ShellStop{SessionId: sid}}})
+				return
+			}
+		}
+	}()
+
+	// --- browser opens the shell ---
+	bws, _, err := websocket.Dial(ctx, wsURLBase+"/api/v1/devices/"+deviceID+"/shell?cols=100&rows=30",
+		&websocket.DialOptions{HTTPHeader: alpha.cookieHeader(t)})
+	if err != nil {
+		t.Fatalf("browser shell dial failed: %v", err)
+	}
+
+	readText, readBin := "", ""
+	deadline := time.Now().Add(8 * time.Second)
+	sawReady, sawEcho, sawExit := false, false, false
+	for time.Now().Before(deadline) && !(sawEcho && sawExit) {
+		rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		typ, data, err := bws.Read(rctx)
+		cancel()
+		if err != nil {
+			break
+		}
+		switch typ {
+		case websocket.MessageBinary:
+			readBin += string(data)
+			if strings.Contains(readBin, "AGENT_READY") {
+				sawReady = true
+				// Send a resize and a keystroke once the shell is live.
+				_ = bws.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","cols":120,"rows":40}`))
+				_ = bws.Write(ctx, websocket.MessageBinary, []byte("ls\n"))
+			}
+			if strings.Contains(readBin, "ECHO:ls\n") {
+				sawEcho = true
+			}
+		case websocket.MessageText:
+			readText += string(data)
+			if strings.Contains(readText, "exit") {
+				sawExit = true
+			}
+		}
+	}
+	bws.Close(websocket.StatusNormalClosure, "")
+	if !sawReady || !sawEcho || !sawExit {
+		t.Fatalf("shell bridge incomplete: ready=%v echo=%v exit=%v (bin=%q text=%q)",
+			sawReady, sawEcho, sawExit, readBin, readText)
+	}
+
+	// --- the session is recorded and finalized ---
+	var sessionID string
+	waitFor(t, func() bool {
+		list := alpha.get(t, "/api/v1/devices/"+deviceID+"/shell-sessions", 200)
+		sessions := list["sessions"].([]any)
+		if len(sessions) != 1 {
+			return false
+		}
+		s := sessions[0].(map[string]any)
+		if s["status"] != "closed" {
+			return false
+		}
+		sessionID = s["id"].(string)
+		return s["has_recording"] == true && s["bytes_out"].(float64) > 0
+	}, 8*time.Second, "shell session to finalize with a recording")
+
+	alpha.get(t, "/api/v1/shell-sessions/"+sessionID, 200)
+
+	// Recording downloads as an asciinema cast.
+	recReq, _ := http.NewRequest("GET", baseURL+"/api/v1/shell-sessions/"+sessionID+"/recording", nil)
+	recResp, err := alpha.http.Do(recReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recBody, _ := io.ReadAll(recResp.Body)
+	recResp.Body.Close()
+	if recResp.StatusCode != 200 {
+		t.Fatalf("recording fetch: got %d", recResp.StatusCode)
+	}
+	if !strings.Contains(string(recBody), `"version":2`) || !strings.Contains(string(recBody), "AGENT_READY") {
+		t.Fatalf("recording is not a populated cast: %q", recBody)
+	}
+
+	// shell.start and shell.end are audited.
+	startAudited, endAudited := false, false
+	for _, e := range alpha.get(t, "/api/v1/audit?limit=200", 200)["entries"].([]any) {
+		switch e.(map[string]any)["action"] {
+		case "shell.start":
+			startAudited = true
+		case "shell.end":
+			endAudited = true
+		}
+	}
+	if !startAudited || !endAudited {
+		t.Fatalf("shell audit missing: start=%v end=%v", startAudited, endAudited)
+	}
+
+	// --- cross-tenant isolation ---
+	beta.get(t, "/api/v1/devices/"+deviceID+"/shell-sessions", 404)
+	beta.get(t, "/api/v1/shell-sessions/"+sessionID, 404)
+	beta.get(t, "/api/v1/shell-sessions/"+sessionID+"/recording", 404)
+}
+
+// waitFor polls cond until it holds or the deadline passes.
+func waitFor(t *testing.T, cond func() bool, d time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", msg)
+}
+
+// rawWSWrite marshals and writes an envelope without using *testing.T, so
+// it is safe to call from helper goroutines.
+func rawWSWrite(ctx context.Context, ws *websocket.Conn, env *rmmpb.Envelope) error {
+	b, err := proto.Marshal(env)
+	if err != nil {
+		return err
+	}
+	return ws.Write(ctx, websocket.MessageBinary, b)
 }

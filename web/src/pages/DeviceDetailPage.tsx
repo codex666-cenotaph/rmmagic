@@ -8,15 +8,19 @@ import {
   ErrorText,
   fmtBytes,
   fmtRelative,
+  fmtTime,
+  Modal,
 } from "../components/ui";
 import { StatCard } from "../components/charts";
+import { CastPlayer, LiveTerminal } from "../components/Terminal";
 
-type Tab = "stats" | "inventory" | "alerts";
+type Tab = "stats" | "inventory" | "alerts" | "shell";
 
 export function DeviceDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const { can } = useAuth();
   const canManage = can("devices.manage");
+  const canShell = can("shell.connect");
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("stats");
 
@@ -112,7 +116,14 @@ export function DeviceDetailPage() {
       <ErrorText error={decommissionMut.error} />
 
       <div className="tabs">
-        {(["stats", "inventory", "alerts"] as Tab[]).map((t) => (
+        {(
+          [
+            "stats",
+            "inventory",
+            "alerts",
+            ...(canShell ? (["shell"] as Tab[]) : []),
+          ] as Tab[]
+        ).map((t) => (
           <button
             key={t}
             type="button"
@@ -150,8 +161,163 @@ export function DeviceDetailPage() {
           error={deviceAlerts.error}
         />
       )}
+
+      {tab === "shell" && canShell && (
+        <ShellTab
+          deviceId={id}
+          online={d.online}
+          active={!decommissioned}
+        />
+      )}
     </div>
   );
+}
+
+function ShellTab({
+  deviceId,
+  online,
+  active,
+}: {
+  deviceId: string;
+  online: boolean;
+  active: boolean;
+}) {
+  const qc = useQueryClient();
+  const [live, setLive] = useState(false);
+  const [playing, setPlaying] = useState<api.ShellSession | null>(null);
+
+  const sessions = useQuery({
+    queryKey: ["shell-sessions", deviceId],
+    queryFn: () => api.listShellSessions(deviceId),
+    enabled: !live,
+  });
+
+  const refresh = () =>
+    void qc.invalidateQueries({ queryKey: ["shell-sessions", deviceId] });
+
+  if (live) {
+    return (
+      <div>
+        <div className="toolbar">
+          <span className="muted">Live session — type to interact.</span>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => {
+              setLive(false);
+              refresh();
+            }}
+          >
+            End session
+          </button>
+        </div>
+        <LiveTerminal deviceId={deviceId} />
+      </div>
+    );
+  }
+
+  const list = sessions.data?.sessions ?? [];
+
+  return (
+    <div>
+      <div className="toolbar">
+        <span className="muted">
+          {online && active
+            ? "Open an interactive root shell on this device."
+            : "Device must be online to start a shell."}
+        </span>
+        <button
+          type="button"
+          disabled={!online || !active}
+          onClick={() => setLive(true)}
+          title={
+            online && active
+              ? "Start a remote shell session"
+              : "Device is offline"
+          }
+        >
+          Start shell
+        </button>
+      </div>
+
+      {sessions.isLoading ? (
+        <p>Loading sessions…</p>
+      ) : sessions.error ? (
+        <ErrorText error={sessions.error} />
+      ) : list.length === 0 ? (
+        <p className="muted">No shell sessions recorded yet.</p>
+      ) : (
+        <div className="card">
+          <h3>Session history</h3>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Status</th>
+                <th>Duration</th>
+                <th>Traffic</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((s) => (
+                <tr key={s.id}>
+                  <td>{fmtTime(s.started_at)}</td>
+                  <td>
+                    <span
+                      className={
+                        s.status === "error"
+                          ? "badge badge-error"
+                          : s.status === "active"
+                            ? "badge badge-warn"
+                            : "badge badge-ok"
+                      }
+                    >
+                      {s.status}
+                    </span>
+                  </td>
+                  <td className="muted">{sessionDuration(s)}</td>
+                  <td className="muted">
+                    ↓{fmtBytes(s.bytes_out)} ↑{fmtBytes(s.bytes_in)}
+                  </td>
+                  <td>
+                    {s.has_recording && (
+                      <button type="button" onClick={() => setPlaying(s)}>
+                        ▶ Play
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {playing && (
+        <Modal
+          title={`Recording — ${fmtTime(playing.started_at)}`}
+          onClose={() => setPlaying(null)}
+        >
+          <CastPlayer sessionId={playing.id} />
+          <div className="modal-actions">
+            <button type="button" onClick={() => setPlaying(null)}>
+              Close
+            </button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function sessionDuration(s: api.ShellSession): string {
+  if (!s.ended_at) return "—";
+  const ms = new Date(s.ended_at).getTime() - new Date(s.started_at).getTime();
+  if (Number.isNaN(ms) || ms < 0) return "—";
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m ${sec % 60}s`;
 }
 
 function InventoryTab({

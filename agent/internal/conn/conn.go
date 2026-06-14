@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -29,6 +30,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/collect"
 	agentexec "github.com/codex666-cenotaph/rmmagic/agent/internal/exec"
 	"github.com/codex666-cenotaph/rmmagic/agent/internal/identity"
+	"github.com/codex666-cenotaph/rmmagic/agent/internal/shell"
 	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
 	rmmpb "github.com/codex666-cenotaph/rmmagic/shared/rmmpb/rmm/v1"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
@@ -204,6 +206,29 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 	}
 	a.Log.Info("connected", "heartbeat_interval", interval.String())
 
+	// All post-handshake writes (heartbeats, command results, shell
+	// output) go through sc so concurrent goroutines never interleave a
+	// frame on the WebSocket.
+	sc := &safeConn{ws: ws}
+
+	// Remote shell: PTY sessions stream output and exit notices back over
+	// this connection. Tear them all down when the connection drops.
+	mgr := shell.NewManager(a.Log,
+		func(sessionID string, data []byte) {
+			_ = sc.Send(ctx, &rmmpb.Envelope{
+				Payload: &rmmpb.Envelope_ShellOutput{ShellOutput: &rmmpb.ShellData{
+					SessionId: sessionID, Data: data,
+				}},
+			})
+		},
+		func(sessionID string) {
+			_ = sc.Send(ctx, &rmmpb.Envelope{
+				Payload: &rmmpb.Envelope_ShellStop{ShellStop: &rmmpb.ShellStop{SessionId: sessionID}},
+			})
+		},
+	)
+	defer mgr.StopAll()
+
 	// Heartbeat writer.
 	hbCtx, stopHB := context.WithCancel(ctx)
 	defer stopHB()
@@ -213,7 +238,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 		for {
 			select {
 			case <-t.C:
-				_ = write(hbCtx, ws, &rmmpb.Envelope{
+				_ = sc.Send(hbCtx, &rmmpb.Envelope{
 					Payload: &rmmpb.Envelope_Heartbeat{Heartbeat: &rmmpb.Heartbeat{}},
 				})
 			case <-hbCtx.Done():
@@ -233,9 +258,38 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 			a.Log.Warn("decommissioned by server")
 			return ErrDecommissioned
 		case *rmmpb.Envelope_CommandRequest:
-			go a.executeCommand(ctx, ws, p.CommandRequest)
+			go a.executeCommand(ctx, sc, p.CommandRequest)
+		case *rmmpb.Envelope_ShellStart:
+			st := p.ShellStart
+			if err := mgr.Start(st.GetSessionId(), uint16(st.GetCols()), uint16(st.GetRows())); err != nil {
+				a.Log.Warn("shell start failed", "session_id", st.GetSessionId(), "error", err)
+				_ = sc.Send(ctx, &rmmpb.Envelope{
+					Payload: &rmmpb.Envelope_ShellStop{ShellStop: &rmmpb.ShellStop{SessionId: st.GetSessionId()}},
+				})
+			}
+		case *rmmpb.Envelope_ShellInput:
+			mgr.Input(p.ShellInput.GetSessionId(), p.ShellInput.GetData())
+		case *rmmpb.Envelope_ShellResize:
+			rs := p.ShellResize
+			mgr.Resize(rs.GetSessionId(), uint16(rs.GetCols()), uint16(rs.GetRows()))
+		case *rmmpb.Envelope_ShellStop:
+			mgr.Stop(p.ShellStop.GetSessionId())
 		}
 	}
+}
+
+// safeConn serializes writes to the gateway WebSocket: coder/websocket
+// permits one writer at a time, but heartbeats, command results, and
+// shell output are produced by independent goroutines.
+type safeConn struct {
+	ws *websocket.Conn
+	mu sync.Mutex
+}
+
+func (c *safeConn) Send(ctx context.Context, env *rmmpb.Envelope) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return write(ctx, c.ws, env)
 }
 
 // statsLoop samples and uploads stats independent of the WS connection
@@ -298,7 +352,7 @@ func (a *Agent) postStats(ctx context.Context, samples []collect.Sample, service
 
 // executeCommand runs a CommandRequest and sends back a CommandResult.
 // It is called in its own goroutine so the read loop keeps serving.
-func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmmpb.CommandRequest) {
+func (a *Agent) executeCommand(ctx context.Context, sc *safeConn, req *rmmpb.CommandRequest) {
 	if req == nil || req.CommandId == "" {
 		return
 	}
@@ -314,7 +368,7 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 		if a.Journal != nil {
 			_ = a.Journal.Record(req.CommandId)
 		}
-		_ = write(ctx, ws, &rmmpb.Envelope{
+		_ = sc.Send(ctx, &rmmpb.Envelope{
 			MessageId: uuid.NewString(),
 			Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
 				CommandId:  req.CommandId,
@@ -338,7 +392,7 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 				a.Log.Warn("inventory refresh upload failed", "error", err)
 			}
 		}()
-		_ = write(ctx, ws, &rmmpb.Envelope{
+		_ = sc.Send(ctx, &rmmpb.Envelope{
 			MessageId: uuid.NewString(),
 			Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
 				CommandId:  req.CommandId,
@@ -380,7 +434,7 @@ func (a *Agent) executeCommand(ctx context.Context, ws *websocket.Conn, req *rmm
 		}
 	}
 
-	_ = write(ctx, ws, &rmmpb.Envelope{
+	_ = sc.Send(ctx, &rmmpb.Envelope{
 		MessageId: uuid.NewString(),
 		Payload: &rmmpb.Envelope_CommandResult{CommandResult: &rmmpb.CommandResult{
 			CommandId:  req.CommandId,

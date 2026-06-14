@@ -27,7 +27,9 @@ COPY server/migrations/ /app/migrations/
 COPY server/docker-entrypoint.sh /app/docker-entrypoint.sh
 
 RUN chmod +x /app/docker-entrypoint.sh && \
-    chown -R rmm:rmm /app
+    chown -R rmm:rmm /app && \
+    mkdir -p /var/lib/rmmserver/recordings && \
+    chown -R rmm:rmm /var/lib/rmmserver
 
 USER rmm
 EXPOSE 8080

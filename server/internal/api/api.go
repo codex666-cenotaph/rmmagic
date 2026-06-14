@@ -17,6 +17,7 @@ import (
 
 	"github.com/codex666-cenotaph/rmmagic/server/internal/auth"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/recordings"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
@@ -38,6 +39,12 @@ type Server struct {
 	// Gateway, when set, is notified to kick live agent connections on
 	// decommission.
 	Gateway *gateway.Gateway
+	// Recordings stores remote-shell session recordings; nil disables
+	// recording (sessions still work, no playback is saved).
+	Recordings recordings.Store
+	// WSOrigins allowlists Origin hosts for the browser shell WebSocket.
+	// Empty = same-origin only (the secure default).
+	WSOrigins []string
 
 	loginLimiter *rateLimiter
 }
@@ -106,6 +113,13 @@ func (s *Server) Routes() []Route {
 		{Method: "GET", Pattern: "/api/v1/devices/{id}", Perm: auth.PermDevicesRead, Handler: s.handleGetDevice},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}/stats", Perm: auth.PermDevicesRead, Handler: s.handleDeviceStats},
 		{Method: "POST", Pattern: "/api/v1/devices/{id}/decommission", Perm: auth.PermDevicesManage, Handler: s.handleDecommissionDevice},
+
+		// Remote shell: a WebSocket bridge to the device PTY, plus session
+		// history and recording playback.
+		{Method: "GET", Pattern: "/api/v1/devices/{id}/shell", Perm: auth.PermShellConnect, Handler: s.handleShellConnect},
+		{Method: "GET", Pattern: "/api/v1/devices/{id}/shell-sessions", Perm: auth.PermShellConnect, Handler: s.handleListShellSessions},
+		{Method: "GET", Pattern: "/api/v1/shell-sessions/{id}", Perm: auth.PermShellConnect, Handler: s.handleGetShellSession},
+		{Method: "GET", Pattern: "/api/v1/shell-sessions/{id}/recording", Perm: auth.PermShellConnect, Handler: s.handleShellRecording},
 
 		{Method: "GET", Pattern: "/api/v1/scripts", Perm: auth.PermScriptsRead, Handler: s.handleListScripts},
 		{Method: "POST", Pattern: "/api/v1/scripts", Perm: auth.PermScriptsManage, Handler: s.handleCreateScript},

@@ -40,11 +40,16 @@ type Gateway struct {
 	Store    *store.Store
 	Registry *Registry
 	Log      *slog.Logger
-	// InsecureAllowed permits non-TLS upgrades (dev only).
+
+	// shellSinks routes agent shell output back to the browser-facing
+	// handler that opened each session, keyed by session_id.
+	shellMu    sync.Mutex
+	shellSinks map[string]*ShellSink
 }
 
 func New(st *store.Store, log *slog.Logger) *Gateway {
-	return &Gateway{Store: st, Registry: NewRegistry(), Log: log}
+	return &Gateway{Store: st, Registry: NewRegistry(), Log: log,
+		shellSinks: map[string]*ShellSink{}}
 }
 
 // HandleConnect is mounted at GET /agent/v1/connect.
@@ -156,6 +161,11 @@ func (g *Gateway) serve(ctx context.Context, ac *agentConn, deviceID, tenantID u
 			// Acks for non-command messages; no-op for now.
 		case *rmmpb.Envelope_CommandResult:
 			g.handleCommandResult(ctx, tenantID, p.CommandResult)
+		case *rmmpb.Envelope_ShellOutput:
+			g.routeShellOutput(ctx, p.ShellOutput)
+		case *rmmpb.Envelope_ShellStop:
+			// The agent's PTY exited; signal the browser side to close.
+			g.endShell(p.ShellStop.GetSessionId())
 		default:
 			g.Log.Warn("unexpected frame from agent", "device_id", deviceID)
 		}

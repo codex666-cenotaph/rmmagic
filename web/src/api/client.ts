@@ -664,6 +664,50 @@ export const createChannel = (body: ChannelBody) =>
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
 
+// ---- Remote shell ----
+
+export type ShellStatus = "active" | "closed" | "error";
+
+export interface ShellSession {
+  id: string;
+  device_id: string;
+  hostname: string;
+  status: ShellStatus;
+  cols: number;
+  rows: number;
+  bytes_in: number;
+  bytes_out: number;
+  has_recording: boolean;
+  error?: string;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export const listShellSessions = (deviceId: string) =>
+  request<{ sessions: ShellSession[] }>(
+    "GET",
+    `/devices/${deviceId}/shell-sessions`,
+  );
+
+export const getShellSession = (id: string) =>
+  request<ShellSession>("GET", `/shell-sessions/${id}`);
+
+// shellSocketURL builds the absolute ws(s):// URL for a live shell against
+// a device, sized to the current terminal grid. Same-origin as the app.
+export function shellSocketURL(
+  deviceId: string,
+  cols: number,
+  rows: number,
+): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}${BASE}/devices/${deviceId}/shell?cols=${cols}&rows=${rows}`;
+}
+
+// recordingURL is the playback source for a finished session's recording.
+export function recordingURL(sessionId: string): string {
+  return `${BASE}/shell-sessions/${sessionId}/recording`;
+}
+
 // ---- Audit ----
 
 export const listAudit = (params: { limit?: number; before?: string }) => {
