@@ -8,5 +8,5 @@
 -- (sets storage_key); rollout refuses a release that has neither, so no
 -- table-level location constraint is enforced here.
 
-ALTER TABLE agent_releases ADD COLUMN storage_key text;
+ALTER TABLE agent_releases ADD COLUMN IF NOT EXISTS storage_key text;
 ALTER TABLE agent_releases ALTER COLUMN url DROP NOT NULL;
