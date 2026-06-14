@@ -30,6 +30,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/storage"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
 	"github.com/codex666-cenotaph/rmmagic/shared/version"
@@ -95,6 +96,34 @@ func runBootstrap(log *slog.Logger, args []string) {
 	log.Info("tenant bootstrapped", "tenant_id", id.String(), "owner", *email)
 }
 
+// openBlobs builds the release blob store. Defaults to a filesystem backend
+// (RMM_STORAGE_DIR); set RMM_S3_ENDPOINT/RMM_S3_BUCKET to use S3/MinIO.
+func openBlobs(log *slog.Logger) storage.Store {
+	if ep := os.Getenv("RMM_S3_ENDPOINT"); ep != "" {
+		s3, err := storage.NewS3(storage.S3Config{
+			Endpoint:  ep,
+			Bucket:    os.Getenv("RMM_S3_BUCKET"),
+			AccessKey: os.Getenv("RMM_S3_ACCESS_KEY"),
+			SecretKey: os.Getenv("RMM_S3_SECRET_KEY"),
+			UseSSL:    envOr("RMM_S3_USE_SSL", "true") != "false",
+		})
+		if err != nil {
+			log.Error("S3 storage init failed", "error", err)
+			os.Exit(2)
+		}
+		log.Info("release storage: s3", "endpoint", ep, "bucket", os.Getenv("RMM_S3_BUCKET"))
+		return s3
+	}
+	dir := envOr("RMM_STORAGE_DIR", "/var/lib/rmmserver/releases")
+	fsStore, err := storage.NewFS(dir)
+	if err != nil {
+		log.Error("filesystem storage init failed", "dir", dir, "error", err)
+		os.Exit(2)
+	}
+	log.Info("release storage: filesystem", "dir", dir)
+	return fsStore
+}
+
 func runServe(log *slog.Logger) {
 	var listenAddr string
 	roles := flag.String("roles", "api,gateway,worker", "comma-separated roles to run: api,gateway,worker")
@@ -146,10 +175,13 @@ func runServe(log *slog.Logger) {
 			cookieSecure := envOr("RMM_COOKIE_SECURE", "true") != "false"
 			srv := api.NewServer(st, box, log, cookieSecure)
 			srv.Gateway = gw
+			srv.Blobs = openBlobs(log)
 			mux.Handle("/api/v1/", srv.Handler())
 			mux.Handle("/agent/v1/enroll", srv.Handler())
 			mux.Handle("/agent/v1/stats", srv.Handler())
 			mux.Handle("/agent/v1/inventory", srv.Handler())
+			// Subtree mount so the {id} download route reaches the API mux.
+			mux.Handle("/agent/v1/releases/", srv.Handler())
 		}
 		if enabled["worker"] {
 			// gw is nil when the gateway role runs elsewhere; schedule-fired

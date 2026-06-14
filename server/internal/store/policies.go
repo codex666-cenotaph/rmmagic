@@ -10,10 +10,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Policy is serialized directly to API clients, so the JSON tags must match
+// the snake_case shape the dashboard expects (docs/API.md). Without them the
+// default Go field names (PascalCase) ship instead, leaving the frontend's
+// policy.channel_ids/rules undefined and crashing the Policies page.
 type Policy struct {
 	ID         uuid.UUID       `json:"id"`
 	Name       string          `json:"name"`
-	ScopeType  string          `json:"scope_type"`
+	ScopeType  string          `json:"scope_type"` // tenant|customer|site|device|tag
 	ScopeID    *uuid.UUID      `json:"scope_id"`
 	ScopeTag   *string         `json:"scope_tag"`
 	Enabled    bool            `json:"enabled"`

@@ -18,6 +18,7 @@ const (
 	PermScriptsManage  Permission = "scripts.manage"
 	PermScriptsExecute Permission = "scripts.execute"
 	PermAppsDeploy     Permission = "apps.deploy"
+	PermAgentUpdate    Permission = "agent.update"
 	PermPoliciesRead   Permission = "policies.read"
 	PermPoliciesManage Permission = "policies.manage"
 	PermAlertsRead     Permission = "alerts.read"
@@ -35,7 +36,7 @@ func All() []Permission {
 		PermOrgRead, PermOrgManage,
 		PermDevicesRead, PermDevicesManage, PermDevicesEnroll,
 		PermScriptsRead, PermScriptsManage, PermScriptsExecute,
-		PermAppsDeploy,
+		PermAppsDeploy, PermAgentUpdate,
 		PermPoliciesRead, PermPoliciesManage,
 		PermAlertsRead, PermAlertsManage,
 		PermShellConnect, PermAuditRead, PermTokensManage,
@@ -63,7 +64,7 @@ func BuiltinRolePermissions() map[string][]Permission {
 	}, readOnly...)
 	admin := append([]Permission{
 		PermUsersManage, PermOrgManage, PermScriptsManage,
-		PermPoliciesManage, PermAuditRead,
+		PermPoliciesManage, PermAuditRead, PermAgentUpdate,
 	}, technician...)
 	owner := append([]Permission{PermTenantManage, PermTokensManage}, admin...)
 	return map[string][]Permission{

@@ -106,8 +106,17 @@ func (s *Server) handleAgentEnroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // authDeviceRequest verifies the Ed25519 signature headers on an
-// agent-originated HTTP request and returns the verified identity.
+// agent-originated HTTP request whose signed message is the request body
+// (stats/inventory uploads).
 func (s *Server) authDeviceRequest(r *http.Request, body []byte) (deviceID, tenantID uuid.UUID, err error) {
+	return s.verifyDeviceSig(r, body)
+}
+
+// verifyDeviceSig checks the X-Device-Id/X-Timestamp/X-Signature headers,
+// verifying the signature over msg. For body-carrying requests msg is the
+// body; for bodyless GETs (e.g. release download) the caller passes the
+// request path so the signature is still bound to the exact resource.
+func (s *Server) verifyDeviceSig(r *http.Request, msg []byte) (deviceID, tenantID uuid.UUID, err error) {
 	deviceID, err = uuid.Parse(r.Header.Get("X-Device-Id"))
 	if err != nil {
 		return uuid.Nil, uuid.Nil, errors.New("bad device id")
@@ -133,10 +142,56 @@ func (s *Server) authDeviceRequest(r *http.Request, body []byte) (deviceID, tena
 	if err != nil || dev.Status != "active" {
 		return uuid.Nil, uuid.Nil, errors.New("unknown device")
 	}
-	if !devicesig.VerifyRequest(ed25519.PublicKey(dev.Pubkey), ts, body, sig) {
+	if !devicesig.VerifyRequest(ed25519.PublicKey(dev.Pubkey), ts, msg, sig) {
 		return uuid.Nil, uuid.Nil, errors.New("bad signature")
 	}
 	return deviceID, dev.TenantID, nil
+}
+
+// handleAgentReleaseDownload streams a release binary to an authenticated
+// agent. Public route, device-authenticated in-handler: the signature is
+// verified over the request path so a bodyless GET is still bound to this
+// release. Releases are global, so any active device may fetch any release
+// (binaries are signed; the agent verifies sha256 + Ed25519 before swap).
+func (s *Server) handleAgentReleaseDownload(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad release id")
+		return
+	}
+	if _, _, err := s.verifyDeviceSig(r, []byte(r.URL.Path)); err != nil {
+		writeError(w, http.StatusUnauthorized, "device authentication failed")
+		return
+	}
+	if s.Blobs == nil {
+		writeError(w, http.StatusServiceUnavailable, "release storage not configured")
+		return
+	}
+
+	var rel store.AgentRelease
+	err = s.Store.System(r.Context(), func(tx pgx.Tx) error {
+		var err error
+		rel, err = store.GetRelease(r.Context(), tx, id)
+		return err
+	})
+	if err != nil || rel.StorageKey == "" {
+		writeError(w, http.StatusNotFound, "release not found")
+		return
+	}
+
+	rc, size, err := s.Blobs.Get(r.Context(), rel.StorageKey)
+	if err != nil {
+		s.Log.Error("release blob read failed", "release_id", id, "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer rc.Close()
+	w.Header().Set("Content-Type", "application/octet-stream")
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, rc)
 }
 
 func (s *Server) handleAgentStats(w http.ResponseWriter, r *http.Request) {

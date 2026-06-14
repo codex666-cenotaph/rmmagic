@@ -55,6 +55,11 @@ export function DeviceDetailPage() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["device-inventory", id] }),
   });
 
+  const channelMut = useMutation({
+    mutationFn: (channel: api.ReleaseChannel) => api.setUpdateChannel(id, channel),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["devices", id] }),
+  });
+
   if (device.isLoading) return <p>Loading device…</p>;
   if (device.error)
     return (
@@ -85,12 +90,26 @@ export function DeviceDetailPage() {
             <MetaItem label="Site" value={d.site_name} />
             <MetaItem label="Operating system" value={`${d.os} (${d.arch})`} />
             <MetaItem label="Agent version" value={d.agent_version} mono />
+            <MetaItem label="Update channel" value={d.update_channel} />
             <MetaItem label="Last seen" value={fmtRelative(d.last_seen_at)} />
             <MetaItem label="Enrolled" value={fmtRelative(d.created_at)} />
           </div>
         </div>
         {canManage && !decommissioned && (
           <div className="hero-actions">
+            <label>
+              Update channel
+              <select
+                value={d.update_channel}
+                disabled={channelMut.isPending}
+                onChange={(e) =>
+                  channelMut.mutate(e.target.value as api.ReleaseChannel)
+                }
+              >
+                <option value="stable">stable</option>
+                <option value="beta">beta</option>
+              </select>
+            </label>
             <button
               type="button"
               className="danger"

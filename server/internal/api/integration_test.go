@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -28,6 +31,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/bootstrap"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/storage"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/worker"
 	"github.com/codex666-cenotaph/rmmagic/shared/devicesig"
@@ -80,10 +84,16 @@ func TestAPIIntegration(t *testing.T) {
 	srv := NewServer(appStore, box, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
 	gw := gateway.New(appStore, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv.Gateway = gw
+	blobs, err := storage.NewFS(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Blobs = blobs
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", srv.Handler())
 	mux.Handle("/agent/v1/enroll", srv.Handler())
 	mux.Handle("/agent/v1/stats", srv.Handler())
+	mux.Handle("/agent/v1/releases/", srv.Handler())
 	mux.HandleFunc("GET /agent/v1/connect", gw.HandleConnect)
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
@@ -215,6 +225,275 @@ func TestAPIIntegration(t *testing.T) {
 	testDeviceFlow(t, ts.URL, alpha, beta, siteID)
 	testScriptsFlow(t, ts.URL, alpha, beta, siteID)
 	testTargetsAndSchedulesFlow(t, ts.URL, alpha, beta, siteID, srv, appStore, priv)
+	testAppsAndUpdatesFlow(t, ts.URL, alpha, beta, siteID)
+	testPolicyJSONShape(t, alpha)
+}
+
+// testPolicyJSONShape guards the wire contract of the policy endpoints: the
+// dashboard reads snake_case fields (policy.channel_ids/rules), and a
+// missing-JSON-tags regression on store.Policy crashes the Policies page.
+func testPolicyJSONShape(t *testing.T, alpha *client) {
+	created := alpha.post(t, "/api/v1/policies", obj{
+		"name": "CPU watch", "scope_type": "tenant", "enabled": true,
+		"rules": obj{"cpu_pct": obj{"threshold": 90}}, "channel_ids": []any{},
+	}, 201)
+	id := created["id"].(string)
+
+	var found map[string]any
+	for _, p := range alpha.get(t, "/api/v1/policies", 200)["policies"].([]any) {
+		m := p.(map[string]any)
+		if m["id"] == id {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatal("created policy not returned by list")
+	}
+	// snake_case keys must be present (PascalCase regression = white screen).
+	for _, key := range []string{"scope_type", "enabled", "rules", "channel_ids", "created_at"} {
+		if _, ok := found[key]; !ok {
+			t.Fatalf("policy JSON missing %q key (got keys %v)", key, keysOf(found))
+		}
+	}
+	if _, ok := found["channel_ids"].([]any); !ok {
+		t.Fatalf("channel_ids must serialize as an array, got %T", found["channel_ids"])
+	}
+
+	// Notification channels: same snake_case contract; the sealed secret
+	// must never be serialized.
+	alpha.post(t, "/api/v1/channels", obj{
+		"name": "ops", "type": "webhook",
+		"config": obj{"url": "https://example.com/hook"},
+		"secret": "test-webhook-secret", // gitleaks:allow
+	}, 201)
+	chans := alpha.get(t, "/api/v1/channels", 200)["channels"].([]any)
+	if len(chans) == 0 {
+		t.Fatal("created channel not returned by list")
+	}
+	ch := chans[0].(map[string]any)
+	for _, key := range []string{"id", "name", "type", "config", "created_at"} {
+		if _, ok := ch[key]; !ok {
+			t.Fatalf("channel JSON missing %q key (got keys %v)", key, keysOf(ch))
+		}
+	}
+	if _, ok := ch["config"].(map[string]any); !ok {
+		t.Fatalf("channel config must serialize as an object, got %T", ch["config"])
+	}
+	for _, leak := range []string{"secret_enc", "SecretEnc", "secret"} {
+		if _, bad := ch[leak]; bad {
+			t.Fatalf("channel JSON leaks secret field %q", leak)
+		}
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+// testAppsAndUpdatesFlow exercises M6: package (apt/dnf) deploy jobs and the
+// signed auto-update rollout (offer over the channel, status back, device
+// version advance), plus update-channel changes and tenant isolation.
+func testAppsAndUpdatesFlow(t *testing.T, baseURL string, alpha, beta *client, siteID string) {
+	ctx := context.Background()
+
+	// Enroll and connect a Linux device.
+	tok := alpha.post(t, "/api/v1/enrollment-tokens", obj{"site_id": siteID}, 201)
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrolled := newClient(t, baseURL).post(t, "/agent/v1/enroll", obj{
+		"token": tok["token"].(string), "hostname": "app-box", "os": "linux", "arch": "amd64",
+		"agent_version": "0.0.0-test", "pubkey": base64.StdEncoding.EncodeToString(pub),
+	}, 201)
+	deviceID := enrolled["device_id"].(string)
+
+	wsURL := strings.Replace(baseURL, "http://", "ws://", 1) + "/agent/v1/connect"
+	ws, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close(websocket.StatusNormalClosure, "")
+	ch := wsRead(t, ctx, ws)
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_AuthResponse{AuthResponse: &rmmpb.AuthResponse{
+		DeviceId: deviceID, Signature: devicesig.SignChallenge(priv, ch.GetAuthChallenge().GetNonce())}}})
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{Payload: &rmmpb.Envelope_Hello{Hello: &rmmpb.Hello{
+		ProtocolVersion: 1, AgentVersion: "0.0.0-test", Os: "linux", Arch: "amd64", Hostname: "app-box"}}})
+	if wsRead(t, ctx, ws).GetHelloAck() == nil {
+		t.Fatal("expected hello ack")
+	}
+
+	// --- App deploy: a package install job uses the same dispatch path ---
+	job := alpha.post(t, "/api/v1/apps/deploy", obj{
+		"device_id": deviceID, "operation": "install", "packages": []string{"nginx", "curl"},
+	}, 201)
+	jobID := job["job_id"].(string)
+
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	var cmd *rmmpb.CommandRequest
+	for cmd == nil {
+		env, err := readEnvelope(rctx, ws)
+		if err != nil {
+			t.Fatalf("no package CommandRequest: %v", err)
+		}
+		cmd = env.GetCommandRequest()
+	}
+	cancel()
+	if cmd.Kind != rmmpb.CommandKind_COMMAND_KIND_PACKAGE_INSTALL {
+		t.Fatalf("expected PACKAGE_INSTALL kind, got %v", cmd.Kind)
+	}
+	if !strings.Contains(string(cmd.Spec), "nginx") {
+		t.Fatalf("package spec missing nginx: %s", cmd.Spec)
+	}
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{MessageId: "pkg-res", Payload: &rmmpb.Envelope_CommandResult{
+		CommandResult: &rmmpb.CommandResult{CommandId: cmd.CommandId,
+			Status: rmmpb.CommandStatus_COMMAND_STATUS_SUCCEEDED, Output: []byte("installed nginx")}}})
+
+	deadline := time.Now().Add(5 * time.Second)
+	var jobStatus string
+	for time.Now().Before(deadline) {
+		jobStatus = alpha.get(t, "/api/v1/jobs/"+jobID, 200)["status"].(string)
+		if jobStatus == "succeeded" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if jobStatus != "succeeded" {
+		t.Fatalf("package job should be succeeded, got %q", jobStatus)
+	}
+
+	// Validation: bad operation and shell-unsafe package names are rejected.
+	alpha.post(t, "/api/v1/apps/deploy", obj{"device_id": deviceID, "operation": "frob", "packages": []string{"x"}}, 400)
+	alpha.post(t, "/api/v1/apps/deploy", obj{"device_id": deviceID, "operation": "install", "packages": []string{"bad; rm -rf /"}}, 400)
+
+	// --- Signed, server-hosted release: register metadata, upload binary,
+	// roll out, download over device-authed endpoint ---
+	binary := []byte("pretend new agent binary bytes")
+	_, relPriv, _ := ed25519.GenerateKey(nil)
+	sum := sha256.Sum256(binary)
+	shaHex := hex.EncodeToString(sum[:])
+	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(relPriv, binary))
+
+	// Server-hosted release: metadata first, no external URL.
+	created := alpha.post(t, "/api/v1/agent-releases", obj{
+		"channel": "stable", "version": "9.9.9", "os": "linux", "arch": "amd64",
+		"sha256": shaHex, "signature": sig, "notes": "test release",
+	}, 201)
+	relID := created["id"].(string)
+
+	// Bad sha256 is rejected at registration.
+	alpha.post(t, "/api/v1/agent-releases", obj{
+		"channel": "stable", "version": "9.9.10", "os": "linux", "arch": "amd64",
+		"sha256": "nothex", "signature": sig,
+	}, 400)
+
+	// Rollout before the binary is uploaded is refused.
+	alpha.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 400)
+
+	// Upload: wrong bytes (sha mismatch) → 400; correct bytes → 200.
+	alpha.postFile(t, "/api/v1/agent-releases/"+relID+"/binary", []byte("WRONG BYTES"), 400)
+	alpha.postFile(t, "/api/v1/agent-releases/"+relID+"/binary", binary, 200)
+
+	// Now the catalog reports a binary is present.
+	hasBinary := false
+	for _, r := range alpha.get(t, "/api/v1/agent-releases?channel=stable", 200)["releases"].([]any) {
+		m := r.(map[string]any)
+		if m["version"] == "9.9.9" && m["has_binary"] == true {
+			hasBinary = true
+		}
+	}
+	if !hasBinary {
+		t.Fatal("release should report has_binary after upload")
+	}
+
+	res := alpha.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 200)
+	if res["matched"].(float64) != 1 {
+		t.Fatalf("expected 1 matched device, got %v", res["matched"])
+	}
+
+	// The agent receives a signed UpdateOffer whose URL is the device-authed
+	// server download path.
+	octx, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	var offer *rmmpb.UpdateOffer
+	for offer == nil {
+		env, err := readEnvelope(octx, ws)
+		if err != nil {
+			t.Fatalf("no UpdateOffer: %v", err)
+		}
+		offer = env.GetUpdateOffer()
+	}
+	cancel2()
+	dlPath := "/agent/v1/releases/" + relID + "/download"
+	if offer.Version != "9.9.9" || offer.Sha256 != shaHex || offer.Url != dlPath {
+		t.Fatalf("unexpected offer: version=%q sha=%q url=%q", offer.Version, offer.Sha256, offer.Url)
+	}
+
+	// Device-signed GET returns the exact bytes; unauthenticated GET is 401.
+	tsig := time.Now().Unix()
+	dreq, _ := http.NewRequest("GET", baseURL+dlPath, nil)
+	dreq.Header.Set("X-Device-Id", deviceID)
+	dreq.Header.Set("X-Timestamp", strconv.FormatInt(tsig, 10))
+	dreq.Header.Set("X-Signature", base64.StdEncoding.EncodeToString(devicesig.SignRequest(priv, tsig, []byte(dlPath))))
+	dresp, err := http.DefaultClient.Do(dreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbody, _ := io.ReadAll(dresp.Body)
+	dresp.Body.Close()
+	if dresp.StatusCode != 200 || !bytes.Equal(dbody, binary) {
+		t.Fatalf("signed download failed: status=%d bytes=%q", dresp.StatusCode, dbody)
+	}
+	uresp, err := http.Get(baseURL + dlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uresp.Body.Close()
+	if uresp.StatusCode != 401 {
+		t.Fatalf("unauthenticated download should be 401, got %d", uresp.StatusCode)
+	}
+
+	// Agent reports the update applied; server advances the device version.
+	wsWrite(t, ctx, ws, &rmmpb.Envelope{MessageId: "upd-1", Payload: &rmmpb.Envelope_UpdateStatus{
+		UpdateStatus: &rmmpb.UpdateStatus{Version: "9.9.9", Phase: rmmpb.UpdatePhase_UPDATE_PHASE_APPLIED}}})
+
+	deadline = time.Now().Add(5 * time.Second)
+	applied := false
+	for time.Now().Before(deadline) && !applied {
+		for _, u := range alpha.get(t, "/api/v1/device-updates", 200)["updates"].([]any) {
+			m := u.(map[string]any)
+			if m["device_id"] == deviceID && m["phase"] == "applied" {
+				applied = true
+			}
+		}
+		if !applied {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if !applied {
+		t.Fatal("device update phase did not reach applied")
+	}
+	if v := alpha.get(t, "/api/v1/devices/"+deviceID, 200)["agent_version"]; v != "9.9.9" {
+		t.Fatalf("agent_version not advanced after update: %v", v)
+	}
+
+	// --- update channel change ---
+	alpha.post(t, "/api/v1/devices/"+deviceID+"/update-channel", obj{"channel": "beta"}, 200)
+	if c := alpha.get(t, "/api/v1/devices/"+deviceID, 200)["update_channel"]; c != "beta" {
+		t.Fatalf("update_channel not changed: %v", c)
+	}
+
+	// --- tenant isolation: device_updates are tenant-scoped; rollout and
+	// channel changes against another tenant's device are blocked. ---
+	if n := len(beta.get(t, "/api/v1/device-updates", 200)["updates"].([]any)); n != 0 {
+		t.Fatalf("beta must see 0 device-updates, got %d", n)
+	}
+	beta.post(t, "/api/v1/agent-releases/"+relID+"/rollout", obj{"device_id": deviceID}, 400)
+	beta.post(t, "/api/v1/devices/"+deviceID+"/update-channel", obj{"channel": "beta"}, 404)
 }
 
 // testDeviceFlow exercises M2: enrollment, gateway auth, heartbeat,
@@ -875,6 +1154,40 @@ func (c *client) req(t *testing.T, method, path string, body any, wantStatus int
 func (c *client) get(t *testing.T, path string, want int) obj {
 	t.Helper()
 	return c.req(t, "GET", path, nil, want)
+}
+
+// postFile uploads data as a multipart "file" field.
+func (c *client) postFile(t *testing.T, path string, data []byte, want int) obj {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "rmmagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	mw.Close()
+	req, err := http.NewRequest("POST", c.base+path, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != want {
+		t.Fatalf("POST %s: got %d want %d (body: %s)", path, resp.StatusCode, want, raw)
+	}
+	out := obj{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return out
 }
 
 func (c *client) post(t *testing.T, path string, body any, want int) obj {

@@ -133,6 +133,26 @@ export function AuditIcon(p: IconProps) {
   );
 }
 
+export function AppsIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <path d="M17.5 14v7M14 17.5h7" />
+    </Svg>
+  );
+}
+
+export function UpdatesIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+    </Svg>
+  );
+}
+
 export function SettingsIcon(p: IconProps) {
   return (
     <Svg {...p}>

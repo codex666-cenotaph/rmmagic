@@ -11,6 +11,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Alert is serialized directly to API clients; the JSON tags must match the
+// snake_case shape the dashboard expects (docs/API.md). Without them the
+// default PascalCase field names ship and the Alerts page reads undefined
+// fields — the same class of crash the Policies page hit.
 type Alert struct {
 	ID         uuid.UUID       `json:"id"`
 	DeviceID   uuid.UUID       `json:"device_id"`

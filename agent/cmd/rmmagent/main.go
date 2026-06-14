@@ -82,7 +82,7 @@ func main() {
 			log.Error("cannot load command journal", "error", err)
 			os.Exit(1)
 		}
-		agent, err := conn.NewAgent(id, log, journal)
+		agent, err := conn.NewAgent(id, log, journal, *stateDir)
 		if err != nil {
 			log.Error("invalid identity", "error", err)
 			os.Exit(1)
