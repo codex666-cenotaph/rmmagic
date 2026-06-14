@@ -130,6 +130,8 @@ export function DeviceDetailPage() {
       </div>
       <ErrorText error={decommissionMut.error} />
 
+      <TagsEditor device={d} canManage={canManage} />
+
       <div className="tabs">
         {(["stats", "inventory", "alerts"] as Tab[]).map((t) => (
           <button
@@ -169,6 +171,112 @@ export function DeviceDetailPage() {
           error={deviceAlerts.error}
         />
       )}
+    </div>
+  );
+}
+
+const SERVER_TAG = "server";
+
+function TagsEditor({
+  device,
+  canManage,
+}: {
+  device: api.Device;
+  canManage: boolean;
+}) {
+  const qc = useQueryClient();
+  const [input, setInput] = useState("");
+  const tags = device.tags ?? [];
+  const isServer = tags.includes(SERVER_TAG);
+
+  const mut = useMutation({
+    mutationFn: (next: string[]) => api.setDeviceTags(device.id, next),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["devices"] });
+      void qc.invalidateQueries({ queryKey: ["devices", device.id] });
+      setInput("");
+    },
+  });
+
+  function save(next: string[]) {
+    // De-dupe and normalize client-side; the server validates again.
+    const seen = new Set<string>();
+    const cleaned = next
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t && !seen.has(t) && (seen.add(t), true));
+    mut.mutate(cleaned);
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <strong>Tags</strong>
+        {canManage && (
+          <button
+            type="button"
+            className={isServer ? "" : "primary"}
+            disabled={mut.isPending}
+            title="Servers run 24/7; tag them so an offline policy can alert when they drop off."
+            onClick={() =>
+              save(
+                isServer
+                  ? tags.filter((t) => t !== SERVER_TAG)
+                  : [...tags, SERVER_TAG],
+              )
+            }
+          >
+            {isServer ? "Unmark as server" : "Mark as server"}
+          </button>
+        )}
+      </div>
+      <div className="card-body">
+        <div className="tag-row">
+          {tags.length === 0 && <span className="muted">No tags.</span>}
+          {tags.map((t) => (
+            <span key={t} className={t === SERVER_TAG ? "badge badge-ok" : "badge"}>
+              {t}
+              {canManage && (
+                <button
+                  type="button"
+                  className="tag-remove"
+                  aria-label={`Remove tag ${t}`}
+                  disabled={mut.isPending}
+                  onClick={() => save(tags.filter((x) => x !== t))}
+                >
+                  ×
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+        {canManage && (
+          <form
+            className="tag-add"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (input.trim()) save([...tags, input]);
+            }}
+          >
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Add a tag…"
+              maxLength={32}
+            />
+            <button type="submit" disabled={mut.isPending || !input.trim()}>
+              Add
+            </button>
+          </form>
+        )}
+        <ErrorText error={mut.error} />
+        {isServer && (
+          <p className="muted">
+            Tagged <code>server</code>. A monitoring policy scoped to the{" "}
+            <code>server</code> tag with an “Offline after” rule will alert
+            when this device goes offline.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

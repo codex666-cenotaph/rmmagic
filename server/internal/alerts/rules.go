@@ -125,7 +125,9 @@ func (r Rules) Validate() error {
 }
 
 // ScopeRank orders policy scopes from broadest to most specific; used
-// by Merge so the nearest scope wins per rule type.
+// by Merge so the nearest scope wins per rule type. A tag scope sits
+// above site (you opt a device in explicitly) but below a
+// device-specific override.
 func ScopeRank(scopeType string) int {
 	switch scopeType {
 	case "tenant":
@@ -134,12 +136,18 @@ func ScopeRank(scopeType string) int {
 		return 1
 	case "site":
 		return 2
-	case "device":
+	case "tag":
 		return 3
+	case "device":
+		return 4
 	default:
 		return -1
 	}
 }
+
+// maxScopeRank is the highest rank ScopeRank can return; Merge iterates
+// ranks up to it.
+const maxScopeRank = 4
 
 // ScopedPolicy is one enabled policy already known to apply to the
 // device under evaluation, tagged with its scope rank.
@@ -174,7 +182,7 @@ type Effective struct {
 // oldest first, so the newest policy at a rank wins).
 func Merge(policies []ScopedPolicy) Effective {
 	var eff Effective
-	for rank := 0; rank <= 3; rank++ {
+	for rank := 0; rank <= maxScopeRank; rank++ {
 		for _, p := range policies {
 			if p.ScopeRank != rank {
 				continue

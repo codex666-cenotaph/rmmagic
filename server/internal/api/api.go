@@ -109,6 +109,7 @@ func (s *Server) Routes() []Route {
 		{Method: "GET", Pattern: "/api/v1/devices", Perm: auth.PermDevicesRead, Handler: s.handleListDevices},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}", Perm: auth.PermDevicesRead, Handler: s.handleGetDevice},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}/stats", Perm: auth.PermDevicesRead, Handler: s.handleDeviceStats},
+		{Method: "PUT", Pattern: "/api/v1/devices/{id}/tags", Perm: auth.PermDevicesManage, Handler: s.handleSetDeviceTags},
 		{Method: "POST", Pattern: "/api/v1/devices/{id}/decommission", Perm: auth.PermDevicesManage, Handler: s.handleDecommissionDevice},
 
 		{Method: "GET", Pattern: "/api/v1/scripts", Perm: auth.PermScriptsRead, Handler: s.handleListScripts},
@@ -153,6 +154,7 @@ func (s *Server) Routes() []Route {
 
 		{Method: "GET", Pattern: "/api/v1/channels", Perm: auth.PermPoliciesRead, Handler: s.handleListChannels},
 		{Method: "POST", Pattern: "/api/v1/channels", Perm: auth.PermPoliciesManage, Handler: s.handleCreateChannel},
+		{Method: "PUT", Pattern: "/api/v1/channels/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleUpdateChannel},
 		{Method: "DELETE", Pattern: "/api/v1/channels/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleDeleteChannel},
 
 		// Agent-facing: no user session; each handler authenticates the

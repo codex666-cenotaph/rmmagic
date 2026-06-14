@@ -197,6 +197,7 @@ type EvalDevice struct {
 	DeviceID   uuid.UUID
 	SiteID     uuid.UUID
 	CustomerID uuid.UUID
+	Tags       []string
 	Hostname   string
 	LastSeenAt *time.Time
 
@@ -214,7 +215,7 @@ type EvalDevice struct {
 // three set-based queries instead of per-device round trips.
 func CollectEvalDevices(ctx context.Context, tx pgx.Tx, window time.Duration) ([]EvalDevice, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT d.id, d.site_id, s.customer_id, d.hostname, d.last_seen_at
+		SELECT d.id, d.site_id, s.customer_id, d.tags, d.hostname, d.last_seen_at
 		FROM devices d JOIN sites s ON s.id = d.site_id
 		WHERE d.status = 'active'`)
 	if err != nil {
@@ -225,7 +226,7 @@ func CollectEvalDevices(ctx context.Context, tx pgx.Tx, window time.Duration) ([
 	idx := map[uuid.UUID]int{}
 	for rows.Next() {
 		var d EvalDevice
-		if err := rows.Scan(&d.DeviceID, &d.SiteID, &d.CustomerID, &d.Hostname, &d.LastSeenAt); err != nil {
+		if err := rows.Scan(&d.DeviceID, &d.SiteID, &d.CustomerID, &d.Tags, &d.Hostname, &d.LastSeenAt); err != nil {
 			return nil, err
 		}
 		idx[d.DeviceID] = len(out)

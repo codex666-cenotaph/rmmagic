@@ -2,6 +2,9 @@ package api
 
 import (
 	"net/http"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,9 +26,10 @@ type deviceJSON struct {
 	CustomerName string     `json:"customer_name"`
 	Hostname     string     `json:"hostname"`
 	OS           string     `json:"os"`
-	Arch         string     `json:"arch"`
+	Arch          string     `json:"arch"`
 	AgentVersion  string     `json:"agent_version"`
 	Status        string     `json:"status"`
+	Tags          []string   `json:"tags"`
 	UpdateChannel string     `json:"update_channel"`
 	Online        bool       `json:"online"`
 	LastSeenAt    *time.Time `json:"last_seen_at"`
@@ -34,11 +38,16 @@ type deviceJSON struct {
 
 func toDeviceJSON(d store.Device) deviceJSON {
 	online := d.Status == "active" && d.LastSeenAt != nil && time.Since(*d.LastSeenAt) < onlineWindow
+	tags := d.Tags
+	if tags == nil {
+		tags = []string{}
+	}
 	return deviceJSON{
 		ID: d.ID, SiteID: d.SiteID, SiteName: d.SiteName,
 		CustomerID: d.CustomerID, CustomerName: d.CustomerName,
 		Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
-		AgentVersion: d.AgentVersion, Status: d.Status, UpdateChannel: d.UpdateChannel, Online: online,
+		AgentVersion: d.AgentVersion, Status: d.Status, Tags: tags,
+		UpdateChannel: d.UpdateChannel, Online: online,
 		LastSeenAt: d.LastSeenAt, CreatedAt: d.CreatedAt,
 	}
 }
@@ -155,6 +164,74 @@ func (s *Server) handleDeviceStats(w http.ResponseWriter, r *http.Request) {
 		samples = []store.StatsSample{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"samples": samples})
+}
+
+const maxTagsPerDevice = 20
+
+// tagPattern keeps tags to a predictable, URL/label-safe shape so they
+// can be matched exactly by tag-scoped policies and shown in the UI.
+var tagPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
+
+// normalizeTags lower-cases, trims, de-dupes and validates a tag list,
+// returning the cleaned set (sorted, stable) or an error message.
+func normalizeTags(in []string) ([]string, string) {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range in {
+		t := strings.ToLower(strings.TrimSpace(raw))
+		if t == "" {
+			continue
+		}
+		if !tagPattern.MatchString(t) {
+			return nil, "tag " + raw + " is invalid: use 1-32 chars of a-z, 0-9, - or _"
+		}
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	if len(out) > maxTagsPerDevice {
+		return nil, "a device may carry at most 20 tags"
+	}
+	sort.Strings(out)
+	return out, ""
+}
+
+func (s *Server) handleSetDeviceTags(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p, _ := auth.PrincipalFrom(ctx)
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Tags []string `json:"tags"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	tags, msg := normalizeTags(req.Tags)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
+		if _, err := getAuthorizedDevice(r, tx, auth.PermDevicesManage, id); err != nil {
+			return err
+		}
+		if err := store.SetDeviceTags(ctx, tx, id, tags); err != nil {
+			return err
+		}
+		return recordAudit(ctx, tx, "device.tags", "device", id,
+			map[string]any{"tags": tags})
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tags": tags})
 }
 
 func (s *Server) handleDecommissionDevice(w http.ResponseWriter, r *http.Request) {

@@ -15,11 +15,12 @@ type Device struct {
 	CustomerID   uuid.UUID // joined from sites for scope checks/UI
 	SiteName     string
 	CustomerName string
-	Hostname     string
-	OS           string
+	Hostname      string
+	OS            string
 	Arch          string
 	AgentVersion  string
 	Status        string
+	Tags          []string
 	UpdateChannel string
 	LastSeenAt    *time.Time
 	CreatedAt     time.Time
@@ -27,7 +28,7 @@ type Device struct {
 
 const deviceSelect = `
 	SELECT d.id, d.site_id, s.customer_id, s.name, c.name,
-	       d.hostname, d.os, d.arch, d.agent_version, d.status, d.update_channel, d.last_seen_at, d.created_at
+	       d.hostname, d.os, d.arch, d.agent_version, d.status, d.tags, d.update_channel, d.last_seen_at, d.created_at
 	FROM devices d
 	JOIN sites s ON s.id = d.site_id
 	JOIN customers c ON c.id = s.customer_id`
@@ -35,7 +36,7 @@ const deviceSelect = `
 func scanDevice(row pgx.Row) (Device, error) {
 	var d Device
 	err := row.Scan(&d.ID, &d.SiteID, &d.CustomerID, &d.SiteName, &d.CustomerName,
-		&d.Hostname, &d.OS, &d.Arch, &d.AgentVersion, &d.Status, &d.UpdateChannel, &d.LastSeenAt, &d.CreatedAt)
+		&d.Hostname, &d.OS, &d.Arch, &d.AgentVersion, &d.Status, &d.Tags, &d.UpdateChannel, &d.LastSeenAt, &d.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return d, ErrNotFound
 	}
@@ -77,6 +78,23 @@ func AddDeviceCredential(ctx context.Context, tx pgx.Tx, tenantID, deviceID uuid
 		INSERT INTO device_credentials (tenant_id, device_id, pubkey, fingerprint)
 		VALUES ($1, $2, $3, $4)`, tenantID, deviceID, pubkey, fingerprint)
 	return err
+}
+
+// SetDeviceTags replaces a device's tag set. Tags are validated and
+// normalized by the caller; the store just persists them.
+func SetDeviceTags(ctx context.Context, tx pgx.Tx, id uuid.UUID, tags []string) error {
+	if tags == nil {
+		tags = []string{}
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE devices SET tags = $2, updated_at = now() WHERE id = $1`, id, tags)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // TouchDevice updates liveness metadata on heartbeat/hello.

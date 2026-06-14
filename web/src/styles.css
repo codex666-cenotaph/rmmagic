@@ -374,7 +374,7 @@ table.data,
 table.data-table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--surface);
+  background: transparent;
 }
 
 table.data th,
@@ -382,7 +382,7 @@ table.data td,
 table.data-table th,
 table.data-table td {
   text-align: left;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
@@ -390,8 +390,9 @@ table.data-table td {
 table.data th,
 table.data-table th {
   font-weight: 600;
-  color: var(--text-2);
-  background: var(--surface-2);
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
 }
 
 table.data tbody tr:hover,
@@ -460,6 +461,41 @@ table.data-table tbody tr:hover {
   border-color: transparent;
 }
 
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.tag-row.inline {
+  display: inline-flex;
+  margin: 0 0 0 8px;
+}
+
+.tag-remove {
+  background: none;
+  border: none;
+  padding: 0 0 0 4px;
+  margin: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.tag-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  max-width: 340px;
+}
+
+.tag-add input {
+  flex: 1;
+}
+
 .secret-box {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   background: var(--surface-2);
@@ -523,39 +559,48 @@ pre.details {
    Dashboard
    ============================================================ */
 
+.dashboard {
+  display: grid;
+  gap: 2rem;
+}
+
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-  margin-bottom: 20px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 24px;
+  margin-bottom: 0;
 }
 
 .stat-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  box-shadow: var(--shadow);
-  border-left: 4px solid var(--border-strong);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+  border-left: none;
+  text-align: center;
+  border-bottom: 3px solid #e8eaed;
+  padding-bottom: 16px;
 }
 
-.stat-card.tone-ok {
-  border-left-color: var(--ok);
-}
-.stat-card.tone-warn {
-  border-left-color: var(--warn);
-}
-.stat-card.tone-error {
-  border-left-color: var(--error);
-}
+.stat-card.tone-ok,
 .stat-card.tone-accent {
-  border-left-color: var(--accent);
+  border-bottom-color: #FF6C29;
+}
+
+.stat-card.tone-warn {
+  border-bottom-color: var(--warn);
+}
+
+.stat-card.tone-error {
+  border-bottom-color: var(--error);
 }
 
 .stat-card-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
+  margin-bottom: 12px;
 }
 
 .stat-label {
@@ -565,30 +610,31 @@ pre.details {
 }
 
 .stat-value {
-  font-size: 30px;
+  font-size: 48px;
   font-weight: 700;
-  line-height: 1.1;
-  margin-top: 6px;
+  line-height: 1;
+  margin: 0;
+  color: #FF6C29;
 }
 
 .stat-sub {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
-  margin-top: 4px;
+  margin-top: 8px;
 }
 
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 32px;
 }
 
 .panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px 18px;
-  box-shadow: var(--shadow);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
 }
 
 .panel.panel-wide {
@@ -596,15 +642,19 @@ pre.details {
 }
 
 .panel h2 {
-  margin: 0 0 14px;
-  font-size: 15px;
+  margin: 0 0 20px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 2px solid #FF6C29;
+  padding-bottom: 12px;
 }
 
 .panel-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  margin-bottom: 20px;
 }
 
 .panel-head h2 {
@@ -621,8 +671,9 @@ pre.details {
 }
 
 .panel-foot {
-  margin: 12px 0 0;
+  margin: 16px 0 0;
   font-size: 12px;
+  color: var(--muted);
 }
 
 /* Donut */
@@ -630,18 +681,19 @@ pre.details {
 .donut-wrap {
   display: flex;
   align-items: center;
-  gap: 20px;
+  justify-content: center;
+  gap: 32px;
   flex-wrap: wrap;
 }
 
 .donut-total {
-  font-size: 28px;
+  font-size: 48px;
   font-weight: 700;
-  fill: var(--text);
+  fill: #FF6C29;
 }
 
 .donut-center-label {
-  font-size: 11px;
+  font-size: 13px;
   fill: var(--muted);
 }
 
@@ -651,31 +703,35 @@ pre.details {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-width: 130px;
+  gap: 12px;
+  min-width: 160px;
 }
 
 .legend li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
+  gap: 10px;
+  font-size: 14px;
 }
 
 .legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
   flex-shrink: 0;
+  background: var(--muted-2);
 }
 
 .legend-label {
   color: var(--text-2);
+  flex: 1;
 }
 
 .legend-value {
-  margin-left: auto;
   font-weight: 600;
+  color: #FF6C29;
+  min-width: 30px;
+  text-align: right;
 }
 
 /* Bar rows */
@@ -683,15 +739,15 @@ pre.details {
 .bar-rows {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
 }
 
 .bar-row {
   display: grid;
-  grid-template-columns: 120px 1fr 44px;
+  grid-template-columns: 140px 1fr 50px;
   align-items: center;
-  gap: 10px;
-  font-size: 13px;
+  gap: 12px;
+  font-size: 14px;
 }
 
 .bar-label {
@@ -702,24 +758,25 @@ pre.details {
 }
 
 .bar-track {
-  height: 10px;
-  background: var(--track);
-  border-radius: 5px;
+  height: 8px;
+  background: var(--muted-2);
+  border-radius: 4px;
   overflow: hidden;
 }
 
 .bar-fill {
   display: block;
   height: 100%;
-  border-radius: 5px;
+  border-radius: 4px;
   min-width: 2px;
   transition: width 0.3s ease;
+  background: #FF6C29;
 }
 
 .bar-value {
   text-align: right;
   font-weight: 600;
-  color: var(--text-2);
+  color: var(--text);
 }
 
 /* ============================================================
@@ -1102,6 +1159,13 @@ button.tab.active {
 .form-actions {
   display: flex;
   gap: 8px;
+}
+
+/* Dashboard responsive */
+@media (max-width: 1200px) {
+  .dash-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ============================================================

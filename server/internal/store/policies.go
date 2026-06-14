@@ -17,8 +17,9 @@ import (
 type Policy struct {
 	ID         uuid.UUID       `json:"id"`
 	Name       string          `json:"name"`
-	ScopeType  string          `json:"scope_type"` // tenant|customer|site|device
+	ScopeType  string          `json:"scope_type"` // tenant|customer|site|device|tag
 	ScopeID    *uuid.UUID      `json:"scope_id"`
+	ScopeTag   *string         `json:"scope_tag"`
 	Enabled    bool            `json:"enabled"`
 	Rules      json.RawMessage `json:"rules"`
 	ChannelIDs []uuid.UUID     `json:"channel_ids"`
@@ -27,12 +28,12 @@ type Policy struct {
 }
 
 const policySelect = `
-	SELECT id, name, scope_type, scope_id, enabled, rules, channel_ids, created_at, updated_at
+	SELECT id, name, scope_type, scope_id, scope_tag, enabled, rules, channel_ids, created_at, updated_at
 	FROM policies`
 
 func scanPolicy(row pgx.Row) (Policy, error) {
 	var p Policy
-	err := row.Scan(&p.ID, &p.Name, &p.ScopeType, &p.ScopeID, &p.Enabled,
+	err := row.Scan(&p.ID, &p.Name, &p.ScopeType, &p.ScopeID, &p.ScopeTag, &p.Enabled,
 		&p.Rules, &p.ChannelIDs, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
@@ -66,18 +67,18 @@ func GetPolicy(ctx context.Context, tx pgx.Tx, id uuid.UUID) (Policy, error) {
 func CreatePolicy(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, p Policy, createdBy *uuid.UUID) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := tx.QueryRow(ctx, `
-		INSERT INTO policies (tenant_id, name, scope_type, scope_id, enabled, rules, channel_ids, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-		tenantID, p.Name, p.ScopeType, p.ScopeID, p.Enabled, p.Rules, p.ChannelIDs, createdBy).Scan(&id)
+		INSERT INTO policies (tenant_id, name, scope_type, scope_id, scope_tag, enabled, rules, channel_ids, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+		tenantID, p.Name, p.ScopeType, p.ScopeID, p.ScopeTag, p.Enabled, p.Rules, p.ChannelIDs, createdBy).Scan(&id)
 	return id, err
 }
 
 func UpdatePolicy(ctx context.Context, tx pgx.Tx, p Policy) error {
 	tag, err := tx.Exec(ctx, `
 		UPDATE policies
-		SET name=$2, scope_type=$3, scope_id=$4, enabled=$5, rules=$6, channel_ids=$7, updated_at=now()
+		SET name=$2, scope_type=$3, scope_id=$4, scope_tag=$5, enabled=$6, rules=$7, channel_ids=$8, updated_at=now()
 		WHERE id=$1`,
-		p.ID, p.Name, p.ScopeType, p.ScopeID, p.Enabled, p.Rules, p.ChannelIDs)
+		p.ID, p.Name, p.ScopeType, p.ScopeID, p.ScopeTag, p.Enabled, p.Rules, p.ChannelIDs)
 	if err != nil {
 		return err
 	}
@@ -98,12 +99,13 @@ func DeletePolicy(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	return nil
 }
 
-// PolicyDeviceScope is the org placement of one device, used to decide
-// which policies apply to it.
+// PolicyDeviceScope is the org placement of one device plus its tags,
+// used to decide which policies apply to it.
 type PolicyDeviceScope struct {
 	DeviceID   uuid.UUID
 	SiteID     uuid.UUID
 	CustomerID uuid.UUID
+	Tags       []string
 }
 
 // AppliesTo reports whether the policy covers the device.
@@ -117,6 +119,16 @@ func (p Policy) AppliesTo(d PolicyDeviceScope) bool {
 		return p.ScopeID != nil && *p.ScopeID == d.SiteID
 	case "device":
 		return p.ScopeID != nil && *p.ScopeID == d.DeviceID
+	case "tag":
+		if p.ScopeTag == nil {
+			return false
+		}
+		for _, t := range d.Tags {
+			if t == *p.ScopeTag {
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }

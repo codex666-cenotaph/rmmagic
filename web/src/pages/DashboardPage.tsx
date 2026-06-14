@@ -119,59 +119,46 @@ export function DashboardPage() {
 
       {/* Top-line metrics */}
       <div className="stat-grid">
-        <StatCard
-          label="Devices online"
-          value={canDevices ? `${online}` : "—"}
-          sub={
-            canDevices ? (
-              <span>
-                {offline > 0 ? `${offline} offline` : "all online"} ·{" "}
-                {active.length} active
-              </span>
-            ) : (
-              "no access"
-            )
-          }
-          tone={offline > 0 ? "warn" : "ok"}
-        />
-        <StatCard
-          label="Firing alerts"
-          value={canAlerts ? `${alerts.length}` : "—"}
-          sub={
-            canAlerts
-              ? `${critical} critical · ${unacked} unacked`
-              : "no access"
-          }
-          tone={alerts.length === 0 ? "ok" : critical > 0 ? "error" : "warn"}
-        />
-        <StatCard
-          label="Jobs in flight"
-          value={canScripts ? `${jobRunning}` : "—"}
-          sub={canScripts ? `${jobs.length} recent` : "no access"}
-          tone={jobRunning > 0 ? "accent" : "default"}
-        />
-        <StatCard
-          label="Outdated agents"
-          value={canDevices ? `${outdated}` : "—"}
-          sub={
-            canDevices
-              ? versions.newest
-                ? `latest ${versions.newest}`
-                : "no devices"
-              : "no access"
-          }
-          tone={outdated > 0 ? "warn" : "ok"}
-        />
-        <StatCard
-          label="Customers"
-          value={`${customers.length}`}
-          sub={
-            canDevices
-              ? `${byCustomer.length} with devices`
-              : `${customers.length} total`
-          }
-          tone="default"
-        />
+        {canDevices && (
+          <StatCard
+            label="Devices online"
+            value={`${online}`}
+            sub={offline > 0 ? `${offline} offline` : "all online"}
+            tone={offline > 0 ? "warn" : "ok"}
+          />
+        )}
+        {canAlerts && (
+          <StatCard
+            label="Firing alerts"
+            value={`${alerts.length}`}
+            sub={`${critical} critical · ${unacked} unacked`}
+            tone={alerts.length === 0 ? "ok" : critical > 0 ? "error" : "warn"}
+          />
+        )}
+        {canScripts && (
+          <StatCard
+            label="Jobs in flight"
+            value={`${jobRunning}`}
+            sub={`${jobs.length} recent`}
+            tone={jobRunning > 0 ? "accent" : "default"}
+          />
+        )}
+        {canDevices && (
+          <StatCard
+            label="Outdated agents"
+            value={`${outdated}`}
+            sub={versions.newest ? `latest ${versions.newest}` : "no devices"}
+            tone={outdated > 0 ? "warn" : "ok"}
+          />
+        )}
+        {canDevices && (
+          <StatCard
+            label="Customers"
+            value={`${customers.length}`}
+            sub={`${byCustomer.length} with devices`}
+            tone="default"
+          />
+        )}
       </div>
 
       <div className="dash-grid">

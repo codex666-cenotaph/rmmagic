@@ -11,12 +11,12 @@ import (
 )
 
 type NotificationChannel struct {
-	ID        uuid.UUID
-	Name      string
-	Type      string // email|webhook
-	Config    json.RawMessage
-	SecretEnc []byte // webhook signing secret, sealed; nil for email
-	CreatedAt time.Time
+	ID        uuid.UUID       `json:"id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"` // email|webhook
+	Config    json.RawMessage `json:"config"`
+	SecretEnc []byte          `json:"-"` // sealed webhook secret; never sent to clients
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 func ListChannels(ctx context.Context, tx pgx.Tx) ([]NotificationChannel, error) {
@@ -62,6 +62,36 @@ func CreateChannel(ctx context.Context, tx pgx.Tx, tenantID, id uuid.UUID,
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, tenantID, name, chType, config, secretEnc, createdBy)
 	return err
+}
+
+func UpdateChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID,
+	name, chType string, config json.RawMessage, secretEnc []byte) error {
+	if len(secretEnc) > 0 {
+		tag, err := tx.Exec(ctx, `
+			UPDATE notification_channels
+			SET name=$2, type=$3, config=$4, secret_enc=$5
+			WHERE id=$1`,
+			id, name, chType, config, secretEnc)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+	} else {
+		tag, err := tx.Exec(ctx, `
+			UPDATE notification_channels
+			SET name=$2, type=$3, config=$4
+			WHERE id=$1`,
+			id, name, chType, config)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+	}
+	return nil
 }
 
 func DeleteChannel(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {

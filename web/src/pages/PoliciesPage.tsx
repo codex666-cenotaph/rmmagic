@@ -9,7 +9,9 @@ export function PoliciesPage() {
   const canManage = can("policies.manage");
   const qc = useQueryClient();
   const [showNewPolicy, setShowNewPolicy] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState<api.Policy | null>(null);
   const [showNewChannel, setShowNewChannel] = useState(false);
+  const [editingChannel, setEditingChannel] = useState<api.Channel | null>(null);
 
   const policies = useQuery({
     queryKey: ["policies"],
@@ -49,12 +51,17 @@ export function PoliciesPage() {
         </div>
         <ErrorText error={policies.error} />
         {policies.isLoading && <p>Loading…</p>}
-        {showNewPolicy && (
+        {(showNewPolicy || editingPolicy) && (
           <PolicyForm
+            policy={editingPolicy ?? undefined}
             channels={channels.data?.channels ?? []}
-            onClose={() => setShowNewPolicy(false)}
+            onClose={() => {
+              setShowNewPolicy(false);
+              setEditingPolicy(null);
+            }}
             onSaved={() => {
               setShowNewPolicy(false);
+              setEditingPolicy(null);
               void qc.invalidateQueries({ queryKey: ["policies"] });
             }}
           />
@@ -68,6 +75,7 @@ export function PoliciesPage() {
             policy={pol}
             channelMap={channelMap}
             canManage={canManage}
+            onEdit={() => setEditingPolicy(pol)}
             onDelete={() => {
               if (confirm(`Delete policy "${pol.name}"?`))
                 deletePolicyMut.mutate(pol.id);
@@ -87,11 +95,16 @@ export function PoliciesPage() {
         </div>
         <ErrorText error={channels.error} />
         {channels.isLoading && <p>Loading…</p>}
-        {showNewChannel && (
+        {(showNewChannel || editingChannel) && (
           <ChannelForm
-            onClose={() => setShowNewChannel(false)}
+            channel={editingChannel ?? undefined}
+            onClose={() => {
+              setShowNewChannel(false);
+              setEditingChannel(null);
+            }}
             onSaved={() => {
               setShowNewChannel(false);
+              setEditingChannel(null);
               void qc.invalidateQueries({ queryKey: ["channels"] });
             }}
           />
@@ -121,17 +134,27 @@ export function PoliciesPage() {
                   </td>
                   <td>
                     {canManage && (
-                      <button
-                        type="button"
-                        className="danger"
-                        disabled={deleteChannelMut.isPending}
-                        onClick={() => {
-                          if (confirm(`Delete channel "${ch.name}"?`))
-                            deleteChannelMut.mutate(ch.id);
-                        }}
-                      >
-                        Delete
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          disabled={deleteChannelMut.isPending}
+                          onClick={() => setEditingChannel(ch)}
+                        >
+                          Edit
+                        </button>
+                        {" "}
+                        <button
+                          type="button"
+                          className="danger"
+                          disabled={deleteChannelMut.isPending}
+                          onClick={() => {
+                            if (confirm(`Delete channel "${ch.name}"?`))
+                              deleteChannelMut.mutate(ch.id);
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -148,11 +171,13 @@ function PolicyCard({
   policy,
   channelMap,
   canManage,
+  onEdit,
   onDelete,
 }: {
   policy: api.Policy;
   channelMap: Record<string, string>;
   canManage: boolean;
+  onEdit: () => void;
   onDelete: () => void;
 }) {
   // Defensive: a malformed/partial policy must never crash the whole app
@@ -186,15 +211,25 @@ function PolicyCard({
         <strong>{policy.name}</strong>
         <span className="muted">
           {policy.scope_type}
-          {policy.scope_id ? ` (${policy.scope_id})` : ""}
+          {policy.scope_type === "tag" && policy.scope_tag
+            ? ` (${policy.scope_tag})`
+            : policy.scope_id
+              ? ` (${policy.scope_id})`
+              : ""}
         </span>
         <span className={policy.enabled ? "badge badge-ok" : "badge"}>
           {policy.enabled ? "enabled" : "disabled"}
         </span>
         {canManage && (
-          <button type="button" className="danger" onClick={onDelete}>
-            Delete
-          </button>
+          <>
+            <button type="button" onClick={onEdit}>
+              Edit
+            </button>
+            {" "}
+            <button type="button" className="danger" onClick={onDelete}>
+              Delete
+            </button>
+          </>
         )}
       </div>
       <div className="card-body">
@@ -216,30 +251,47 @@ function PolicyCard({
 }
 
 function PolicyForm({
+  policy,
   channels,
   onClose,
   onSaved,
 }: {
+  policy?: api.Policy;
   channels: api.Channel[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const qc = useQueryClient();
-  const [name, setName] = useState("");
-  const [scopeType, setScopeType] = useState<api.PolicyScopeType>("tenant");
+  const isEditing = !!policy;
+
+  const [name, setName] = useState(policy?.name ?? "");
+  const [scopeType, setScopeType] = useState<api.PolicyScopeType>(
+    policy?.scope_type ?? "tenant"
+  );
   const [scopeCustomerId, setScopeCustomerId] = useState("");
   const [scopeSiteId, setScopeSiteId] = useState("");
   const [scopeDeviceId, setScopeDeviceId] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [cpuEnabled, setCpuEnabled] = useState(false);
-  const [cpuThreshold, setCpuThreshold] = useState("80");
-  const [memEnabled, setMemEnabled] = useState(false);
-  const [memThreshold, setMemThreshold] = useState("80");
-  const [diskEnabled, setDiskEnabled] = useState(false);
-  const [diskThreshold, setDiskThreshold] = useState("85");
-  const [offlineEnabled, setOfflineEnabled] = useState(false);
-  const [offlineAfterS, setOfflineAfterS] = useState("300");
-  const [channelIDs, setChannelIDs] = useState<string[]>([]);
+  const [scopeTag, setScopeTag] = useState(policy?.scope_tag ?? "");
+  const [enabled, setEnabled] = useState(policy?.enabled ?? true);
+  const [cpuEnabled, setCpuEnabled] = useState(!!policy?.rules?.cpu_pct);
+  const [cpuThreshold, setCpuThreshold] = useState(
+    String(policy?.rules?.cpu_pct?.threshold ?? "80")
+  );
+  const [memEnabled, setMemEnabled] = useState(!!policy?.rules?.mem_pct);
+  const [memThreshold, setMemThreshold] = useState(
+    String(policy?.rules?.mem_pct?.threshold ?? "80")
+  );
+  const [diskEnabled, setDiskEnabled] = useState(!!policy?.rules?.disk_pct);
+  const [diskThreshold, setDiskThreshold] = useState(
+    String(policy?.rules?.disk_pct?.threshold ?? "85")
+  );
+  const [offlineEnabled, setOfflineEnabled] = useState(!!policy?.rules?.offline);
+  const [offlineAfterS, setOfflineAfterS] = useState(
+    String(policy?.rules?.offline?.after_s ?? "300")
+  );
+  const [channelIDs, setChannelIDs] = useState<string[]>(
+    policy?.channel_ids ?? []
+  );
   const [err, setErr] = useState("");
 
   // Scope targets, loaded lazily as the scope type requires them.
@@ -260,7 +312,13 @@ function PolicyForm({
   });
 
   const mut = useMutation({
-    mutationFn: (body: api.PolicyBody) => api.createPolicy(body),
+    mutationFn: async (body: api.PolicyBody) => {
+      if (isEditing) {
+        await api.updatePolicy(policy!.id, body);
+      } else {
+        await api.createPolicy(body);
+      }
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["policies"] });
       onSaved();
@@ -284,8 +342,13 @@ function PolicyForm({
   function submit(ev: React.FormEvent) {
     ev.preventDefault();
     setErr("");
+    const tag = scopeTag.trim().toLowerCase();
+    if (scopeType === "tag" && !tag) {
+      setErr("Enter a tag (e.g. server) for this policy");
+      return;
+    }
     const id = scopeID();
-    if (scopeType !== "tenant" && !id) {
+    if (scopeType !== "tenant" && scopeType !== "tag" && !id) {
       setErr(`Select a ${scopeType} for this policy`);
       return;
     }
@@ -297,7 +360,8 @@ function PolicyForm({
     mut.mutate({
       name,
       scope_type: scopeType,
-      scope_id: scopeType === "tenant" ? undefined : id,
+      scope_id: scopeType === "tenant" || scopeType === "tag" ? undefined : id,
+      scope_tag: scopeType === "tag" ? tag : undefined,
       enabled,
       rules,
       channel_ids: channelIDs,
@@ -306,7 +370,7 @@ function PolicyForm({
 
   return (
     <form className="card form" onSubmit={submit}>
-      <h3>New policy</h3>
+      <h3>{isEditing ? "Edit policy" : "New policy"}</h3>
       <label>
         Name
         <input value={name} onChange={(e) => setName(e.target.value)} required />
@@ -320,14 +384,32 @@ function PolicyForm({
             setScopeCustomerId("");
             setScopeSiteId("");
             setScopeDeviceId("");
+            setScopeTag("");
           }}
         >
           <option value="tenant">Tenant (all devices)</option>
           <option value="customer">Customer</option>
           <option value="site">Site</option>
+          <option value="tag">Tag (e.g. servers)</option>
           <option value="device">Device</option>
         </select>
       </label>
+
+      {scopeType === "tag" && (
+        <label>
+          Tag
+          <input
+            value={scopeTag}
+            onChange={(e) => setScopeTag(e.target.value)}
+            placeholder="server"
+            required
+          />
+          <span className="muted">
+            Applies to every device carrying this tag. Pair with an
+            “Offline after” rule so tagged servers alert when they drop off.
+          </span>
+        </label>
+      )}
 
       {(scopeType === "customer" || scopeType === "site") && (
         <label>
@@ -497,7 +579,7 @@ function PolicyForm({
       {err && <p className="error">{err}</p>}
       <div className="form-actions">
         <button type="submit" disabled={mut.isPending}>
-          Create
+          {isEditing ? "Save" : "Create"}
         </button>
         <button type="button" onClick={onClose}>
           Cancel
@@ -508,22 +590,42 @@ function PolicyForm({
 }
 
 function ChannelForm({
+  channel,
   onClose,
   onSaved,
 }: {
+  channel?: api.Channel;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const qc = useQueryClient();
-  const [name, setName] = useState("");
-  const [type, setType] = useState<api.ChannelType>("email");
-  const [recipients, setRecipients] = useState("");
-  const [webhookURL, setWebhookURL] = useState("");
+  const isEditing = !!channel;
+
+  const [name, setName] = useState(channel?.name ?? "");
+  const [type, setType] = useState<api.ChannelType>(
+    channel?.type ?? "email"
+  );
+  const [recipients, setRecipients] = useState(
+    channel?.type === "email"
+      ? ((channel.config as { recipients?: string[] }).recipients ?? []).join("\n")
+      : ""
+  );
+  const [webhookURL, setWebhookURL] = useState(
+    channel?.type === "webhook"
+      ? (channel.config as { url?: string }).url ?? ""
+      : ""
+  );
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState("");
 
   const mut = useMutation({
-    mutationFn: (body: api.ChannelBody) => api.createChannel(body),
+    mutationFn: async (body: api.ChannelBody) => {
+      if (isEditing) {
+        await api.updateChannel(channel!.id, body);
+      } else {
+        await api.createChannel(body);
+      }
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["channels"] });
       onSaved();
@@ -550,8 +652,12 @@ function ChannelForm({
         setErr("URL required");
         return;
       }
-      if (secret.length < 16) {
-        setErr("Webhook deliveries are HMAC-signed; the secret must be at least 16 characters");
+      if (secret && secret.length < 16) {
+        setErr("Webhook signing secret must be at least 16 characters");
+        return;
+      }
+      if (!isEditing && !secret) {
+        setErr("Webhook deliveries are HMAC-signed; a secret is required");
         return;
       }
       config = { url: webhookURL };
@@ -561,7 +667,7 @@ function ChannelForm({
 
   return (
     <form className="card form" onSubmit={submit}>
-      <h3>New channel</h3>
+      <h3>{isEditing ? "Edit channel" : "New channel"}</h3>
       <label>
         Name
         <input value={name} onChange={(e) => setName(e.target.value)} required />
@@ -571,6 +677,7 @@ function ChannelForm({
         <select
           value={type}
           onChange={(e) => setType(e.target.value as api.ChannelType)}
+          disabled={isEditing}
         >
           <option value="email">Email</option>
           <option value="webhook">Webhook</option>
@@ -603,7 +710,8 @@ function ChannelForm({
               value={secret}
               onChange={(e) => setSecret(e.target.value)}
               minLength={16}
-              required
+              placeholder={isEditing ? "Leave blank to keep current secret" : ""}
+              required={!isEditing}
             />
           </label>
         </>
@@ -612,7 +720,7 @@ function ChannelForm({
       {err && <p className="error">{err}</p>}
       <div className="form-actions">
         <button type="submit" disabled={mut.isPending}>
-          Create
+          {isEditing ? "Save" : "Create"}
         </button>
         <button type="button" onClick={onClose}>
           Cancel

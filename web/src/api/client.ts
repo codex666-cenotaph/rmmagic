@@ -132,6 +132,7 @@ export interface Device {
   arch: string;
   agent_version: string;
   status: DeviceStatus;
+  tags: string[];
   update_channel: ReleaseChannel;
   online: boolean;
   last_seen_at: string | null;
@@ -277,6 +278,9 @@ export const getDeviceStats = (id: string, since?: string, until?: string) => {
     `/devices/${id}/stats${qs ? `?${qs}` : ""}`,
   );
 };
+
+export const setDeviceTags = (id: string, tags: string[]) =>
+  request<{ tags: string[] }>("PUT", `/devices/${id}/tags`, { tags });
 
 export const decommissionDevice = (id: string) =>
   request<Record<string, never>>("POST", `/devices/${id}/decommission`);
@@ -531,13 +535,14 @@ export const refreshInventory = (deviceId: string) =>
 
 // ---- Policies ----
 
-export type PolicyScopeType = "tenant" | "customer" | "site" | "device";
+export type PolicyScopeType = "tenant" | "customer" | "site" | "device" | "tag";
 
 export interface Policy {
   id: string;
   name: string;
   scope_type: PolicyScopeType;
   scope_id: string | null;
+  scope_tag: string | null;
   enabled: boolean;
   rules: PolicyRules;
   channel_ids: string[];
@@ -578,6 +583,7 @@ export interface PolicyBody {
   name: string;
   scope_type: PolicyScopeType;
   scope_id?: string;
+  scope_tag?: string;
   enabled: boolean;
   rules: PolicyRules;
   channel_ids: string[];
@@ -665,6 +671,9 @@ export const listChannels = () =>
 
 export const createChannel = (body: ChannelBody) =>
   request<{ id: string }>("POST", "/channels", body);
+
+export const updateChannel = (id: string, body: ChannelBody) =>
+  request<void>("PUT", `/channels/${id}`, body);
 
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
