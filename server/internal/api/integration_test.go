@@ -226,6 +226,47 @@ func TestAPIIntegration(t *testing.T) {
 	testScriptsFlow(t, ts.URL, alpha, beta, siteID)
 	testTargetsAndSchedulesFlow(t, ts.URL, alpha, beta, siteID, srv, appStore, priv)
 	testAppsAndUpdatesFlow(t, ts.URL, alpha, beta, siteID)
+	testPolicyJSONShape(t, alpha)
+}
+
+// testPolicyJSONShape guards the wire contract of the policy endpoints: the
+// dashboard reads snake_case fields (policy.channel_ids/rules), and a
+// missing-JSON-tags regression on store.Policy crashes the Policies page.
+func testPolicyJSONShape(t *testing.T, alpha *client) {
+	created := alpha.post(t, "/api/v1/policies", obj{
+		"name": "CPU watch", "scope_type": "tenant", "enabled": true,
+		"rules": obj{"cpu_pct": obj{"threshold": 90}}, "channel_ids": []any{},
+	}, 201)
+	id := created["id"].(string)
+
+	var found map[string]any
+	for _, p := range alpha.get(t, "/api/v1/policies", 200)["policies"].([]any) {
+		m := p.(map[string]any)
+		if m["id"] == id {
+			found = m
+		}
+	}
+	if found == nil {
+		t.Fatal("created policy not returned by list")
+	}
+	// snake_case keys must be present (PascalCase regression = white screen).
+	for _, key := range []string{"scope_type", "enabled", "rules", "channel_ids", "created_at"} {
+		if _, ok := found[key]; !ok {
+			t.Fatalf("policy JSON missing %q key (got keys %v)", key, keysOf(found))
+		}
+	}
+	if _, ok := found["channel_ids"].([]any); !ok {
+		t.Fatalf("channel_ids must serialize as an array, got %T", found["channel_ids"])
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 // testAppsAndUpdatesFlow exercises M6: package (apt/dnf) deploy jobs and the

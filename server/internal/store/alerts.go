@@ -11,24 +11,28 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Alert is serialized directly to API clients; the JSON tags must match the
+// snake_case shape the dashboard expects (docs/API.md). Without them the
+// default PascalCase field names ship and the Alerts page reads undefined
+// fields — the same class of crash the Policies page hit.
 type Alert struct {
-	ID         uuid.UUID
-	DeviceID   uuid.UUID
-	Hostname   string
-	SiteID     uuid.UUID
-	CustomerID uuid.UUID
-	PolicyID   *uuid.UUID
-	RuleType   string
-	DedupKey   string
-	Severity   string
-	Message    string
-	Details    json.RawMessage
-	ChannelIDs []uuid.UUID
-	Status     string
-	FiredAt    time.Time
-	ResolvedAt *time.Time
-	AckedBy    *uuid.UUID
-	AckedAt    *time.Time
+	ID         uuid.UUID       `json:"id"`
+	DeviceID   uuid.UUID       `json:"device_id"`
+	Hostname   string          `json:"hostname"`
+	SiteID     uuid.UUID       `json:"site_id"`
+	CustomerID uuid.UUID       `json:"customer_id"`
+	PolicyID   *uuid.UUID      `json:"policy_id"`
+	RuleType   string          `json:"rule_type"`
+	DedupKey   string          `json:"dedup_key"`
+	Severity   string          `json:"severity"`
+	Message    string          `json:"message"`
+	Details    json.RawMessage `json:"details"`
+	ChannelIDs []uuid.UUID     `json:"channel_ids"`
+	Status     string          `json:"status"`
+	FiredAt    time.Time       `json:"fired_at"`
+	ResolvedAt *time.Time      `json:"resolved_at"`
+	AckedBy    *uuid.UUID      `json:"acked_by"`
+	AckedAt    *time.Time      `json:"acked_at"`
 }
 
 const alertSelect = `

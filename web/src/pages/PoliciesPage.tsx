@@ -155,7 +155,9 @@ function PolicyCard({
   canManage: boolean;
   onDelete: () => void;
 }) {
-  const rules = policy.rules;
+  // Defensive: a malformed/partial policy must never crash the whole app
+  // (a blank/white page). Default missing shapes to empty.
+  const rules = policy.rules ?? {};
   const ruleLines: string[] = [];
   if (rules.cpu_pct)
     ruleLines.push(`CPU ≥ ${rules.cpu_pct.threshold}% (${rules.cpu_pct.severity ?? "warning"})`);
@@ -171,10 +173,10 @@ function PolicyCard({
     );
   if (rules.service_down)
     ruleLines.push(
-      `Service down: ${rules.service_down.services.join(", ")} (${rules.service_down.severity ?? "warning"})`,
+      `Service down: ${(rules.service_down.services ?? []).join(", ")} (${rules.service_down.severity ?? "warning"})`,
     );
 
-  const chNames = policy.channel_ids
+  const chNames = (policy.channel_ids ?? [])
     .map((id) => channelMap[id] ?? id)
     .join(", ");
 
