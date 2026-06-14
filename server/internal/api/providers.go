@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -219,7 +221,9 @@ func (p *mistralProvider) chat(ctx context.Context, system string, tools []assis
 }
 
 // complete performs one Mistral chat-completions call and returns the
-// assistant message.
+// assistant message, retrying transient rate-limit (429) and server (5xx)
+// responses with backoff. Mistral's per-minute limits are easy to hit
+// because every turn re-sends the full tool schema + system prompt.
 func (p *mistralProvider) complete(ctx context.Context, msgs []mistralMessage, tools []map[string]any) (mistralMessage, error) {
 	body, _ := json.Marshal(map[string]any{
 		"model":       p.model,
@@ -228,9 +232,37 @@ func (p *mistralProvider) complete(ctx context.Context, msgs []mistralMessage, t
 		"tools":       tools,
 		"tool_choice": "auto",
 	})
+
+	const maxAttempts = 3
+	var (
+		lastErr    error
+		retryAfter time.Duration // server-suggested delay from the last attempt
+	)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// Backoff before retrying; respect Retry-After when provided.
+			if err := sleepCtx(ctx, retryDelay(attempt, retryAfter)); err != nil {
+				return mistralMessage{}, err
+			}
+		}
+		msg, retryable, ra, err := p.attempt(ctx, body)
+		if err == nil {
+			return msg, nil
+		}
+		lastErr = err
+		retryAfter = ra
+		if !retryable {
+			break
+		}
+	}
+	return mistralMessage{}, lastErr
+}
+
+// attempt makes one HTTP call. retryable is true for 429/5xx.
+func (p *mistralProvider) attempt(ctx context.Context, body []byte) (mistralMessage, bool, time.Duration, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, mistralEndpoint, bytes.NewReader(body))
 	if err != nil {
-		return mistralMessage{}, err
+		return mistralMessage{}, false, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -238,12 +270,19 @@ func (p *mistralProvider) complete(ctx context.Context, msgs []mistralMessage, t
 
 	resp, err := p.http.Do(req)
 	if err != nil {
-		return mistralMessage{}, err
+		return mistralMessage{}, true, 0, err // network error: retry
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024*1024))
+
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		ra := parseRetryAfter(resp.Header.Get("Retry-After"))
+		return mistralMessage{}, true, ra,
+			fmt.Errorf("mistral API HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return mistralMessage{}, fmt.Errorf("mistral API HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
+		return mistralMessage{}, false, 0,
+			fmt.Errorf("mistral API HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(raw))
 	}
 
 	var parsed struct {
@@ -252,10 +291,50 @@ func (p *mistralProvider) complete(ctx context.Context, msgs []mistralMessage, t
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return mistralMessage{}, fmt.Errorf("decode mistral response: %w", err)
+		return mistralMessage{}, false, 0, fmt.Errorf("decode mistral response: %w", err)
 	}
 	if len(parsed.Choices) == 0 {
-		return mistralMessage{}, fmt.Errorf("mistral returned no choices")
+		return mistralMessage{}, false, 0, fmt.Errorf("mistral returned no choices")
 	}
-	return parsed.Choices[0].Message, nil
+	return parsed.Choices[0].Message, false, 0, nil
+}
+
+// retryDelay returns the backoff for an attempt, preferring a
+// server-provided Retry-After when present.
+func retryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 {
+		return retryAfter
+	}
+	d := time.Duration(1<<uint(attempt-1)) * time.Second // 1s, 2s, 4s…
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d
+}
+
+func parseRetryAfter(h string) time.Duration {
+	if h == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(strings.TrimSpace(h)); err == nil && secs > 0 {
+		if secs > 30 {
+			secs = 30 // cap so a request can't hang too long
+		}
+		return time.Duration(secs) * time.Second
+	}
+	return 0
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -139,11 +140,22 @@ func (s *Server) handleAssistantChat(w http.ResponseWriter, r *http.Request) {
 	reply, calls, err := prov.chat(ctx, assistantSystemPrompt, tools, req.Messages, exec)
 	if err != nil {
 		s.Log.Error("assistant chat failed", "error", err)
-		writeError(w, http.StatusBadGateway, "assistant request failed")
+		// Surface a trimmed upstream detail so the operator can tell a rate
+		// limit from a bad key from a model error.
+		writeError(w, http.StatusBadGateway, "assistant request failed: "+clip(err.Error(), 300))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"reply":      reply,
 		"tool_calls": calls,
 	})
+}
+
+// clip truncates s to at most n characters for safe inclusion in an error.
+func clip(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		return s[:n] + "…"
+	}
+	return s
 }
