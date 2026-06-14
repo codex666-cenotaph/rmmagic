@@ -30,11 +30,11 @@ const (
 	confirmTokenContext = "dispatch-confirm"
 )
 
-// resolveAuthorizedTarget expands the target selector and checks
-// PermScriptsExecute on every site it touches. Any out-of-scope device
-// fails the whole request: explicitly targeting devices you cannot
-// execute on is an error, not something to silently filter.
-func resolveAuthorizedTarget(ctx context.Context, tx pgx.Tx, target store.JobTarget) ([]store.TargetDevice, error) {
+// resolveAuthorizedTarget expands the target selector and checks perm on
+// every site it touches. Any out-of-scope device fails the whole request:
+// explicitly targeting devices you cannot act on is an error, not
+// something to silently filter.
+func resolveAuthorizedTarget(ctx context.Context, tx pgx.Tx, target store.JobTarget, perm auth.Permission) ([]store.TargetDevice, error) {
 	devices, err := store.ResolveTarget(ctx, tx, target)
 	if err != nil {
 		return nil, err
@@ -44,7 +44,7 @@ func resolveAuthorizedTarget(ctx context.Context, tx pgx.Tx, target store.JobTar
 		if checkedSites[d.SiteID] {
 			continue
 		}
-		if err := requireInTx(ctx, tx, auth.PermScriptsExecute, auth.Scope{Type: auth.ScopeSite, ID: d.SiteID}); err != nil {
+		if err := requireInTx(ctx, tx, perm, auth.Scope{Type: auth.ScopeSite, ID: d.SiteID}); err != nil {
 			return nil, err
 		}
 		checkedSites[d.SiteID] = true

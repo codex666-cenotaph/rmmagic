@@ -13,8 +13,9 @@ import (
 
 type Job struct {
 	ID         uuid.UUID
-	ScriptID   uuid.UUID
-	ScriptName string
+	Kind       string     // script | package_install | package_remove
+	ScriptID   *uuid.UUID // nil for package jobs
+	ScriptName string     // "" for package jobs
 	DeviceID   uuid.UUID
 	SiteID     uuid.UUID // for scope filtering
 	CustomerID uuid.UUID // for scope filtering
@@ -22,14 +23,21 @@ type Job struct {
 	CommandID  string
 	Status     string
 	TimeoutS   int
-	Language   string
-	Parameters json.RawMessage
+	Language   string          // "" for package jobs
+	Parameters json.RawMessage // script params
+	Spec       json.RawMessage // package spec ({"packages":[...]}) for package jobs
 	ScheduleID *uuid.UUID
 	CreatedAt  time.Time
 	ExpiresAt  time.Time
 	SentAt     *time.Time
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+}
+
+// PackageSpecJSON is the spec payload for package_install / package_remove
+// jobs, stored in jobs.spec and forwarded verbatim to the agent.
+type PackageSpecJSON struct {
+	Packages []string `json:"packages"`
 }
 
 // JobTarget is the target selector for a dispatch or schedule: exactly
@@ -106,32 +114,38 @@ type JobOutput struct {
 	ExitCode *int
 }
 
-// PendingJob is the minimal data needed to (re-)dispatch a job.
+// PendingJob is the minimal data needed to (re-)dispatch a job. For script
+// jobs Language/ScriptBody/Parameters are set; for package jobs Spec is set.
 type PendingJob struct {
 	JobID      uuid.UUID
+	Kind       string
 	CommandID  string
 	DeviceID   uuid.UUID
 	Language   string
 	ScriptBody string
 	Parameters json.RawMessage
+	Spec       json.RawMessage
 	TimeoutS   int
 	ExpiresAt  time.Time
 }
 
+// jobSelect LEFT JOINs scripts because package jobs carry no script_id;
+// COALESCE keeps the nullable script columns scannable into plain strings.
 const jobSelect = `
-	SELECT j.id, j.script_id, s.name, j.device_id, d.site_id, si.customer_id, d.hostname,
-	       j.command_id, j.status, j.timeout_s, j.language, j.parameters, j.schedule_id,
+	SELECT j.id, j.kind, j.script_id, COALESCE(s.name, ''), j.device_id, d.site_id, si.customer_id, d.hostname,
+	       j.command_id, j.status, j.timeout_s, COALESCE(j.language, ''), j.parameters,
+	       COALESCE(j.spec, 'null'::jsonb), j.schedule_id,
 	       j.created_at, j.expires_at, j.sent_at, j.started_at, j.finished_at
 	FROM jobs j
-	JOIN scripts s ON s.id = j.script_id
+	LEFT JOIN scripts s ON s.id = j.script_id
 	JOIN devices d ON d.id = j.device_id
 	JOIN sites si ON si.id = d.site_id`
 
 func scanJob(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(
-		&j.ID, &j.ScriptID, &j.ScriptName, &j.DeviceID, &j.SiteID, &j.CustomerID, &j.Hostname,
-		&j.CommandID, &j.Status, &j.TimeoutS, &j.Language, &j.Parameters, &j.ScheduleID,
+		&j.ID, &j.Kind, &j.ScriptID, &j.ScriptName, &j.DeviceID, &j.SiteID, &j.CustomerID, &j.Hostname,
+		&j.CommandID, &j.Status, &j.TimeoutS, &j.Language, &j.Parameters, &j.Spec, &j.ScheduleID,
 		&j.CreatedAt, &j.ExpiresAt, &j.SentAt, &j.StartedAt, &j.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return j, ErrNotFound
@@ -199,6 +213,23 @@ func CreateJob(ctx context.Context, tx pgx.Tx,
 	return id, commandID, err
 }
 
+// CreatePackageJob inserts one per-device package install/remove job. kind
+// is "package_install" or "package_remove"; spec is the JSON package spec
+// ({"packages":[...]}). Script columns are left NULL.
+func CreatePackageJob(ctx context.Context, tx pgx.Tx,
+	tenantID, deviceID uuid.UUID, createdBy, scheduleID *uuid.UUID,
+	kind string, timeoutS int, expiresAt time.Time, spec json.RawMessage) (uuid.UUID, string, error) {
+	var id uuid.UUID
+	var commandID string
+	err := tx.QueryRow(ctx, `
+		INSERT INTO jobs (tenant_id, device_id, kind, spec, timeout_s, expires_at, created_by, schedule_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		RETURNING id, command_id`,
+		tenantID, deviceID, kind, spec, timeoutS, expiresAt, createdBy, scheduleID).
+		Scan(&id, &commandID)
+	return id, commandID, err
+}
+
 // ExpireQueuedJobs sweeps queued jobs past their expiry to status
 // 'expired'. Returns the number of jobs expired.
 func ExpireQueuedJobs(ctx context.Context, tx pgx.Tx) (int64, error) {
@@ -222,7 +253,8 @@ func MarkJobSent(ctx context.Context, tx pgx.Tx, jobID uuid.UUID) error {
 // or connection dropped before result came back).
 func ListPendingJobsForDevice(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID) ([]PendingJob, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT id, command_id, device_id, language, script_body, parameters, timeout_s, expires_at
+		SELECT id, kind, command_id, device_id, COALESCE(language, ''), COALESCE(script_body, ''),
+		       parameters, COALESCE(spec, 'null'::jsonb), timeout_s, expires_at
 		FROM jobs
 		WHERE device_id=$1 AND status IN ('pending','sent') AND expires_at > now()
 		ORDER BY created_at`, deviceID)
@@ -233,8 +265,8 @@ func ListPendingJobsForDevice(ctx context.Context, tx pgx.Tx, deviceID uuid.UUID
 	var out []PendingJob
 	for rows.Next() {
 		var p PendingJob
-		if err := rows.Scan(&p.JobID, &p.CommandID, &p.DeviceID,
-			&p.Language, &p.ScriptBody, &p.Parameters, &p.TimeoutS, &p.ExpiresAt); err != nil {
+		if err := rows.Scan(&p.JobID, &p.Kind, &p.CommandID, &p.DeviceID,
+			&p.Language, &p.ScriptBody, &p.Parameters, &p.Spec, &p.TimeoutS, &p.ExpiresAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

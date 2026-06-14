@@ -21,7 +21,12 @@ ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=/var/lib/rmmagent
+# /var/lib/rmmagent holds identity/journal/update state. /usr/bin is also
+# writable so signed auto-update can atomically swap the agent binary in
+# place (kept narrow to the install dir; ProtectSystem=full still guards the
+# rest of /usr, /boot, /etc). Restart=always above relaunches into the new
+# binary after a swap; the agent's watchdog rolls back on failed health check.
+ReadWritePaths=/var/lib/rmmagent /usr/bin
 
 [Install]
 WantedBy=multi-user.target

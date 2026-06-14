@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -66,6 +68,53 @@ func parseTSV(data []byte) []Package {
 		pkgs = []Package{}
 	}
 	return pkgs
+}
+
+// InstallPackages installs the named packages with the host package
+// manager (apt on Debian/Ubuntu, dnf/yum on RHEL family), returning the
+// combined command output. Package names are validated by the caller; the
+// manager is invoked non-interactively so jobs never block on a prompt.
+func InstallPackages(ctx context.Context, names []string) ([]byte, error) {
+	return runPackageManager(ctx, "install", names)
+}
+
+// RemovePackages uninstalls the named packages with the host package
+// manager, returning the combined command output.
+func RemovePackages(ctx context.Context, names []string) ([]byte, error) {
+	return runPackageManager(ctx, "remove", names)
+}
+
+// errNoPackageManager is returned when neither apt nor dnf/yum is present.
+var errNoPackageManager = errors.New("no supported package manager (apt/dnf/yum) found")
+
+// runPackageManager builds and runs the install/remove command for the
+// first available manager. apt-get is preferred when present, then dnf,
+// then yum, matching collectDpkg/collectRPM precedence.
+func runPackageManager(ctx context.Context, op string, names []string) ([]byte, error) {
+	if len(names) == 0 {
+		return nil, errors.New("no packages specified")
+	}
+	var argv []string
+	switch {
+	case have("apt-get"):
+		// remove keeps config; the job model treats remove as uninstall.
+		argv = append([]string{"apt-get", "-y", op}, names...)
+	case have("dnf"):
+		argv = append([]string{"dnf", "-y", op}, names...)
+	case have("yum"):
+		argv = append([]string{"yum", "-y", op}, names...)
+	default:
+		return nil, errNoPackageManager
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	// Non-interactive: apt must never prompt mid-job.
+	cmd.Env = append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
+	return cmd.CombinedOutput()
+}
+
+func have(bin string) bool {
+	_, err := exec.LookPath(bin)
+	return err == nil
 }
 
 // CollectServices lists systemd service states. Returns an empty slice

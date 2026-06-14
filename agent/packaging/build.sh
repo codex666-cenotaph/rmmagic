@@ -65,6 +65,15 @@ COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown
 VPKG="github.com/codex666-cenotaph/rmmagic/shared/version"
 LDFLAGS="-s -w -X ${VPKG}.Version=${VERSION} -X ${VPKG}.Commit=${COMMIT}"
 
+# Embed the trusted auto-update signing public key(s) so the agent will
+# verify and apply signed releases. TRUSTED_UPDATE_KEYS is a comma-separated
+# list of base64 (std) Ed25519 public keys. When unset, the agent refuses
+# all updates (fail closed) — intended for local/dev builds.
+UPKG="github.com/codex666-cenotaph/rmmagic/agent/internal/update"
+if [[ -n "${TRUSTED_UPDATE_KEYS:-}" ]]; then
+  LDFLAGS="$LDFLAGS -X ${UPKG}.TrustedKeysB64=${TRUSTED_UPDATE_KEYS}"
+fi
+
 rm -rf "$DIST"; mkdir -p "$DIST"
 log "Version ${VERSION} (commit ${COMMIT}); targets: ${TARGETS}"
 

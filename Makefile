@@ -59,6 +59,7 @@ dev: dev-stack
 	RMM_APP_ROLE=rmm_app \
 	RMM_MASTER_KEY=$$(grep RMM_MASTER_KEY .env 2>/dev/null | cut -d= -f2 || echo "0000000000000000000000000000000000000000000000000000000000000000") \
 	RMM_COOKIE_SECURE=false \
+	RMM_STORAGE_DIR="$(CURDIR)/.dev-releases" \
 	go run ./server/cmd/rmmserver & \
 	cd web && npm run dev & \
 	wait

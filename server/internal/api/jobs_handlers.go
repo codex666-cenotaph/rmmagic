@@ -16,15 +16,17 @@ import (
 
 type jobJSON struct {
 	ID         uuid.UUID       `json:"id"`
-	ScriptID   uuid.UUID       `json:"script_id"`
-	ScriptName string          `json:"script_name"`
+	Kind       string          `json:"kind"`
+	ScriptID   *uuid.UUID      `json:"script_id,omitempty"`
+	ScriptName string          `json:"script_name,omitempty"`
 	DeviceID   uuid.UUID       `json:"device_id"`
 	Hostname   string          `json:"hostname"`
 	CommandID  string          `json:"command_id"`
 	Status     string          `json:"status"`
 	TimeoutS   int             `json:"timeout_s"`
-	Language   string          `json:"language"`
+	Language   string          `json:"language,omitempty"`
 	Parameters json.RawMessage `json:"parameters"`
+	Spec       json.RawMessage `json:"spec,omitempty"`
 	ScheduleID *uuid.UUID      `json:"schedule_id,omitempty"`
 	CreatedAt  time.Time       `json:"created_at"`
 	ExpiresAt  time.Time       `json:"expires_at"`
@@ -38,11 +40,15 @@ func toJobJSON(j store.Job) jobJSON {
 	if params == nil {
 		params = json.RawMessage("{}")
 	}
+	var spec json.RawMessage
+	if len(j.Spec) > 0 && string(j.Spec) != "null" {
+		spec = j.Spec
+	}
 	return jobJSON{
-		ID: j.ID, ScriptID: j.ScriptID, ScriptName: j.ScriptName,
+		ID: j.ID, Kind: j.Kind, ScriptID: j.ScriptID, ScriptName: j.ScriptName,
 		DeviceID: j.DeviceID, Hostname: j.Hostname,
 		CommandID: j.CommandID, Status: j.Status,
-		TimeoutS: j.TimeoutS, Language: j.Language, Parameters: params,
+		TimeoutS: j.TimeoutS, Language: j.Language, Parameters: params, Spec: spec,
 		ScheduleID: j.ScheduleID,
 		CreatedAt:  j.CreatedAt, ExpiresAt: j.ExpiresAt, SentAt: j.SentAt,
 		StartedAt: j.StartedAt, FinishedAt: j.FinishedAt,
@@ -221,7 +227,7 @@ func (s *Server) handleDispatchJob(w http.ResponseWriter, r *http.Request) {
 		if sc.ArchivedAt != nil {
 			return store.ErrNotFound
 		}
-		devices, err := resolveAuthorizedTarget(ctx, tx, req.Target)
+		devices, err := resolveAuthorizedTarget(ctx, tx, req.Target, auth.PermScriptsExecute)
 		if err != nil {
 			return err
 		}

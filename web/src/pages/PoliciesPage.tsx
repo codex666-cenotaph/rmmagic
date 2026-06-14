@@ -129,8 +129,8 @@ export function PoliciesPage() {
                   <td>{ch.type}</td>
                   <td className="muted">
                     {ch.type === "email"
-                      ? ((ch.config as { recipients?: string[] }).recipients ?? []).join(", ")
-                      : (ch.config as { url?: string }).url ?? ""}
+                      ? ((ch.config as { recipients?: string[] })?.recipients ?? []).join(", ")
+                      : (ch.config as { url?: string })?.url ?? ""}
                   </td>
                   <td>
                     {canManage && (
@@ -180,8 +180,8 @@ function PolicyCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  // Guard against a policy row with missing/empty rules so one bad
-  // record can't take down the whole page.
+  // Defensive: a malformed/partial policy must never crash the whole app
+  // (a blank/white page). Default missing shapes to empty.
   const rules = policy.rules ?? {};
   const ruleLines: string[] = [];
   if (rules.cpu_pct)
@@ -198,10 +198,10 @@ function PolicyCard({
     );
   if (rules.service_down)
     ruleLines.push(
-      `Service down: ${rules.service_down.services.join(", ")} (${rules.service_down.severity ?? "warning"})`,
+      `Service down: ${(rules.service_down.services ?? []).join(", ")} (${rules.service_down.severity ?? "warning"})`,
     );
 
-  const chNames = policy.channel_ids
+  const chNames = (policy.channel_ids ?? [])
     .map((id) => channelMap[id] ?? id)
     .join(", ");
 

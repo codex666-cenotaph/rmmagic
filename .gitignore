@@ -14,3 +14,4 @@ rmmserver
 .run/
 deploy/rmmagic.env
 agent/packaging/.staging/
+.dev-releases/

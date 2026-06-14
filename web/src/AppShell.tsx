@@ -7,6 +7,7 @@ import { useTheme } from "./theme";
 import { Assistant } from "./components/Assistant";
 import {
   AlertsIcon,
+  AppsIcon,
   AuditIcon,
   CustomersIcon,
   DashboardIcon,
@@ -18,6 +19,7 @@ import {
   ScriptsIcon,
   SettingsIcon,
   TokensIcon,
+  UpdatesIcon,
   UsersIcon,
 } from "./components/icons";
 
@@ -80,6 +82,13 @@ const NAV: NavGroup[] = [
         label: "Schedules",
         icon: SchedulesIcon,
         perm: "scripts.read",
+      },
+      { to: "/apps", label: "App Deployment", icon: AppsIcon, perm: "apps.deploy" },
+      {
+        to: "/updates",
+        label: "Agent Updates",
+        icon: UpdatesIcon,
+        perm: "devices.read",
       },
     ],
   },

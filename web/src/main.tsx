@@ -17,6 +17,8 @@ import { DeviceDetailPage } from "./pages/DeviceDetailPage";
 import { ScriptsPage } from "./pages/ScriptsPage";
 import { JobsPage } from "./pages/JobsPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
+import { AppsPage } from "./pages/AppsPage";
+import { UpdatesPage } from "./pages/UpdatesPage";
 import { EnrollPage } from "./pages/EnrollPage";
 import { CustomersPage } from "./pages/CustomersPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -63,6 +65,8 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/scripts" element={<ScriptsPage />} />
               <Route path="/jobs" element={<JobsPage />} />
               <Route path="/schedules" element={<SchedulesPage />} />
+              <Route path="/apps" element={<AppsPage />} />
+              <Route path="/updates" element={<UpdatesPage />} />
               <Route path="/enroll" element={<EnrollPage />} />
               <Route path="/customers" element={<CustomersPage />} />
               <Route path="/users" element={<UsersPage />} />
