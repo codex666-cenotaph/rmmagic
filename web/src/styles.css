@@ -579,13 +579,21 @@ pre.details {
   box-shadow: none;
   border-left: none;
   text-align: center;
+  border-bottom: 3px solid #e8eaed;
+  padding-bottom: 16px;
 }
 
 .stat-card.tone-ok,
-.stat-card.tone-warn,
-.stat-card.tone-error,
 .stat-card.tone-accent {
-  border-left-color: transparent;
+  border-bottom-color: #FF6C29;
+}
+
+.stat-card.tone-warn {
+  border-bottom-color: var(--warn);
+}
+
+.stat-card.tone-error {
+  border-bottom-color: var(--error);
 }
 
 .stat-card-head {
@@ -606,7 +614,7 @@ pre.details {
   font-weight: 700;
   line-height: 1;
   margin: 0;
-  color: var(--text);
+  color: #FF6C29;
 }
 
 .stat-sub {
@@ -638,6 +646,8 @@ pre.details {
   font-size: 16px;
   font-weight: 600;
   color: var(--text);
+  border-bottom: 2px solid #FF6C29;
+  padding-bottom: 12px;
 }
 
 .panel-head {
@@ -679,7 +689,7 @@ pre.details {
 .donut-total {
   font-size: 48px;
   font-weight: 700;
-  fill: var(--text);
+  fill: #FF6C29;
 }
 
 .donut-center-label {
@@ -719,7 +729,7 @@ pre.details {
 
 .legend-value {
   font-weight: 600;
-  color: var(--text);
+  color: #FF6C29;
   min-width: 30px;
   text-align: right;
 }
@@ -760,7 +770,7 @@ pre.details {
   border-radius: 4px;
   min-width: 2px;
   transition: width 0.3s ease;
-  background: var(--text);
+  background: #FF6C29;
 }
 
 .bar-value {
