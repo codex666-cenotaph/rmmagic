@@ -127,6 +127,35 @@ script dispatch. Package names are validated server-side.
 Package jobs appear in `/jobs` with `kind` = `package_install`/`package_remove`
 and a `spec` of `{packages: [...]}` instead of a script.
 
+### Rule-based deployment
+
+The managed layer on top of `/apps/deploy`. **App packages** are reusable,
+OS-specific app definitions (install spec + how to detect the app is already
+present). **Deployment rules** bind a package to a scope
+(tenant/customer/site/device) with optional tag and hostname filters. The
+worker reconciles each enabled rule at most hourly: it resolves the scope,
+applies the filters (the package OS is always enforced), skips devices that
+already have the app (inventory detection) or that already have an install in
+flight, and creates `package_install` jobs for the rest.
+
+| Method/Path | Permission | Body / Response |
+|---|---|---|
+| GET /app-packages | apps.read | `?archived=true` to include archived → `{packages: [AppPackage]}` |
+| POST /app-packages | apps.manage | `{name, description?, os: linux\|windows\|darwin, packages: [string], detection_names?: [string], timeout_s?}` → 201 `{id}` |
+| GET /app-packages/{id} | apps.read | → `AppPackage` |
+| PUT /app-packages/{id} | apps.manage | same body as POST → 204 |
+| DELETE /app-packages/{id} | apps.manage | archive (soft-delete) → 204 |
+| GET /deployment-rules | apps.read | → `{rules: [DeploymentRule]}` |
+| POST /deployment-rules | apps.manage | `{package_id, name, scope_type, scope_id?, filters: {tags?, tags_match?: any\|all, hostname_regex?}, enabled}` → 201 `{id}` |
+| GET /deployment-rules/{id} | apps.read | → `DeploymentRule` |
+| PUT /deployment-rules/{id} | apps.manage | same body as POST → 204 |
+| DELETE /deployment-rules/{id} | apps.manage | → 204 |
+
+`AppPackage` stores `install` as `{packages: [...]}` and `detection` as
+`{method: "package_name", names: [...]}` (empty `names` means "detect by the
+install package names"). Deployment-created jobs carry no `created_by` (system
+actor) and appear in `/jobs` like any other `package_install`.
+
 ## Agent updates
 
 Signed auto-update. `agent_releases` is a **global** catalog (shared across

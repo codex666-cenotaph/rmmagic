@@ -135,6 +135,18 @@ func (s *Server) Routes() []Route {
 
 		{Method: "POST", Pattern: "/api/v1/apps/deploy", Perm: auth.PermAppsDeploy, Handler: s.handleDeployApp},
 
+		{Method: "GET", Pattern: "/api/v1/app-packages", Perm: auth.PermAppsRead, Handler: s.handleListAppPackages},
+		{Method: "POST", Pattern: "/api/v1/app-packages", Perm: auth.PermAppsManage, Handler: s.handleCreateAppPackage},
+		{Method: "GET", Pattern: "/api/v1/app-packages/{id}", Perm: auth.PermAppsRead, Handler: s.handleGetAppPackage},
+		{Method: "PUT", Pattern: "/api/v1/app-packages/{id}", Perm: auth.PermAppsManage, Handler: s.handleUpdateAppPackage},
+		{Method: "DELETE", Pattern: "/api/v1/app-packages/{id}", Perm: auth.PermAppsManage, Handler: s.handleArchiveAppPackage},
+
+		{Method: "GET", Pattern: "/api/v1/deployment-rules", Perm: auth.PermAppsRead, Handler: s.handleListDeploymentRules},
+		{Method: "POST", Pattern: "/api/v1/deployment-rules", Perm: auth.PermAppsManage, Handler: s.handleCreateDeploymentRule},
+		{Method: "GET", Pattern: "/api/v1/deployment-rules/{id}", Perm: auth.PermAppsRead, Handler: s.handleGetDeploymentRule},
+		{Method: "PUT", Pattern: "/api/v1/deployment-rules/{id}", Perm: auth.PermAppsManage, Handler: s.handleUpdateDeploymentRule},
+		{Method: "DELETE", Pattern: "/api/v1/deployment-rules/{id}", Perm: auth.PermAppsManage, Handler: s.handleDeleteDeploymentRule},
+
 		{Method: "GET", Pattern: "/api/v1/agent-releases", Perm: auth.PermDevicesRead, Handler: s.handleListReleases},
 		{Method: "POST", Pattern: "/api/v1/agent-releases", Perm: auth.PermAgentUpdate, Handler: s.handleCreateRelease},
 		{Method: "POST", Pattern: "/api/v1/agent-releases/{id}/binary", Perm: auth.PermAgentUpdate, Handler: s.handleUploadReleaseBinary},
