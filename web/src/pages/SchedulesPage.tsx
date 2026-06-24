@@ -18,6 +18,8 @@ function describeTarget(t: api.JobTarget): string {
   if (t.device_ids) return `${t.device_ids.length} device(s)`;
   if (t.site_id) return "site";
   if (t.customer_id) return "customer";
+  if (t.os) return `OS: ${t.os}`;
+  if (t.tag) return `tag: ${t.tag}`;
   return "—";
 }
 

@@ -89,9 +89,11 @@ Install command to display with a new token:
 `POST /scripts/{id}/dispatch` body:
 `{target, parameters?: {name: value}, timeout_s? (default 300), expires_in_s? (default 86400, max 604800), confirm_token?}`
 with `target` exactly one of `{device_ids: [uuid]}`, `{site_id}`,
-`{customer_id}` (legacy shorthand `{device_id}` still accepted). The
-target expands to its **active** devices at dispatch time; targeting
-devices outside the caller's scripts.execute scope fails the request.
+`{customer_id}`, `{os}` (every active device of that OS string), or
+`{tag}` (every active device carrying that tag) — legacy shorthand
+`{device_id}` still accepted. The target expands to its **active**
+devices at dispatch time; targeting devices outside the caller's
+scripts.execute scope fails the request.
 
 If the target resolves to more than the blast-radius threshold
 (default 25 devices), the response is **409**

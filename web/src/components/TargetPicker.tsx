@@ -2,10 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as api from "../api/client";
 
-type Mode = "devices" | "site" | "customer";
+type Mode = "devices" | "site" | "customer" | "os" | "tag";
 
-// TargetPicker builds a JobTarget: explicit devices, one site, or one
-// customer. Calls onChange with null while the selection is incomplete.
+// TargetPicker builds a JobTarget: explicit devices, one site, one
+// customer, every device of an OS, or every device carrying a tag. Calls
+// onChange with null while the selection is incomplete.
 export function TargetPicker({
   onChange,
 }: {
@@ -15,6 +16,8 @@ export function TargetPicker({
   const [customerId, setCustomerId] = useState("");
   const [siteId, setSiteId] = useState("");
   const [deviceIds, setDeviceIds] = useState<Set<string>>(new Set());
+  const [os, setOs] = useState("");
+  const [tag, setTag] = useState("");
 
   const customers = useQuery({ queryKey: ["customers"], queryFn: api.listCustomers });
   const devices = useQuery({ queryKey: ["devices"], queryFn: api.listDevices });
@@ -29,15 +32,36 @@ export function TargetPicker({
     [devices.data],
   );
 
+  // Distinct OS and tag values across active devices, for the dropdowns.
+  const osOptions = useMemo(
+    () => [...new Set(activeDevices.map((d) => d.os).filter(Boolean))].sort(),
+    [activeDevices],
+  );
+  const tagOptions = useMemo(
+    () => [...new Set(activeDevices.flatMap((d) => d.tags ?? []))].sort(),
+    [activeDevices],
+  );
+
+  // How many active devices the OS/tag selection currently matches, so the
+  // user sees the blast radius before submitting.
+  const matchCount = useMemo(() => {
+    if (mode === "os" && os) return activeDevices.filter((d) => d.os === os).length;
+    if (mode === "tag" && tag)
+      return activeDevices.filter((d) => (d.tags ?? []).includes(tag)).length;
+    return 0;
+  }, [mode, os, tag, activeDevices]);
+
   useEffect(() => {
     let target: api.JobTarget | null = null;
     if (mode === "devices" && deviceIds.size > 0) target = { device_ids: [...deviceIds] };
     if (mode === "site" && siteId) target = { site_id: siteId };
     if (mode === "customer" && customerId) target = { customer_id: customerId };
+    if (mode === "os" && os) target = { os };
+    if (mode === "tag" && tag) target = { tag };
     onChange(target);
     // onChange is assumed stable enough; parents pass setState.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, customerId, siteId, deviceIds]);
+  }, [mode, customerId, siteId, deviceIds, os, tag]);
 
   function toggleDevice(id: string) {
     setDeviceIds((prev) => {
@@ -59,11 +83,15 @@ export function TargetPicker({
             setCustomerId("");
             setSiteId("");
             setDeviceIds(new Set());
+            setOs("");
+            setTag("");
           }}
         >
           <option value="devices">Specific devices</option>
           <option value="site">All devices in a site</option>
           <option value="customer">All devices of a customer</option>
+          <option value="os">All devices of an OS</option>
+          <option value="tag">All devices with a tag</option>
         </select>
       </label>
 
@@ -119,6 +147,43 @@ export function TargetPicker({
             ))}
           </select>
         </label>
+      )}
+
+      {mode === "os" && (
+        <label>
+          Operating system
+          <select value={os} onChange={(e) => setOs(e.target.value)} required>
+            <option value="">Select an OS…</option>
+            {osOptions.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {mode === "tag" && (
+        <label>
+          Tag
+          <select value={tag} onChange={(e) => setTag(e.target.value)} required>
+            <option value="">
+              {tagOptions.length === 0 ? "No tags in use" : "Select a tag…"}
+            </option>
+            {tagOptions.map((tg) => (
+              <option key={tg} value={tg}>
+                {tg}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {(mode === "os" || mode === "tag") && (os || tag) && (
+        <p className="muted">
+          Matches {matchCount} active device{matchCount === 1 ? "" : "s"} now.
+          New matching devices are included automatically on each run.
+        </p>
       )}
     </div>
   );

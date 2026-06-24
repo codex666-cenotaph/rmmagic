@@ -41,11 +41,15 @@ type PackageSpecJSON struct {
 }
 
 // JobTarget is the target selector for a dispatch or schedule: exactly
-// one of the three fields is set.
+// one of the fields is set. Beyond explicit devices/site/customer, a
+// target may select every active device of a given OS or carrying a
+// given tag.
 type JobTarget struct {
 	DeviceIDs  []uuid.UUID `json:"device_ids,omitempty"`
 	SiteID     *uuid.UUID  `json:"site_id,omitempty"`
 	CustomerID *uuid.UUID  `json:"customer_id,omitempty"`
+	OS         string      `json:"os,omitempty"`
+	Tag        string      `json:"tag,omitempty"`
 }
 
 func (t JobTarget) Validate() error {
@@ -59,8 +63,14 @@ func (t JobTarget) Validate() error {
 	if t.CustomerID != nil {
 		n++
 	}
+	if t.OS != "" {
+		n++
+	}
+	if t.Tag != "" {
+		n++
+	}
 	if n != 1 {
-		return errors.New("target must set exactly one of device_ids, site_id, customer_id")
+		return errors.New("target must set exactly one of device_ids, site_id, customer_id, os, tag")
 	}
 	return nil
 }
@@ -90,6 +100,12 @@ func ResolveTarget(ctx context.Context, tx pgx.Tx, t JobTarget) ([]TargetDevice,
 		     JOIN sites s ON s.id = d.site_id
 		     WHERE s.customer_id = $1 AND d.status = 'active' ORDER BY d.hostname`
 		arg = *t.CustomerID
+	case t.OS != "":
+		q = `SELECT id, site_id FROM devices WHERE os = $1 AND status = 'active' ORDER BY hostname`
+		arg = t.OS
+	case t.Tag != "":
+		q = `SELECT id, site_id FROM devices WHERE $1 = ANY(tags) AND status = 'active' ORDER BY hostname`
+		arg = t.Tag
 	default:
 		return nil, errors.New("empty target")
 	}

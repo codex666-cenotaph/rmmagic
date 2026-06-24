@@ -350,6 +350,8 @@ export interface JobTarget {
   device_ids?: string[];
   site_id?: string;
   customer_id?: string;
+  os?: string;
+  tag?: string;
 }
 
 export type JobStatus =
