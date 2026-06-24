@@ -6,6 +6,8 @@ import { ErrorText, Modal, fmtRelative, fmtTime } from "../components/ui";
 import { TargetPicker } from "../components/TargetPicker";
 
 const CRON_PRESETS = [
+  { label: "Every minute", value: "* * * * *" },
+  { label: "Every 5 minutes", value: "*/5 * * * *" },
   { label: "Every hour", value: "@hourly" },
   { label: "Nightly at 03:00 UTC", value: "0 3 * * *" },
   { label: "Weekly (Sun 03:00 UTC)", value: "0 3 * * 0" },
@@ -17,17 +19,6 @@ function describeTarget(t: api.JobTarget): string {
   if (t.site_id) return "site";
   if (t.customer_id) return "customer";
   return "—";
-}
-
-// parseExitCodes turns a comma/space separated list into integer codes,
-// dropping anything that isn't a number.
-function parseExitCodes(s: string): number[] {
-  return s
-    .split(/[\s,]+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0)
-    .map((t) => Number(t))
-    .filter((n) => Number.isInteger(n));
 }
 
 function describeCheck(s: api.Schedule): string {
@@ -43,7 +34,30 @@ function describeCheck(s: api.Schedule): string {
   }
 }
 
+// parseExitCodes turns a comma/space separated list into integer codes,
+// dropping anything that isn't a number.
+function parseExitCodes(s: string): number[] {
+  return s
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map((t) => Number(t))
+    .filter((n) => Number.isInteger(n));
+}
+
+// SchedulesPage and HealthChecksPage are the same underlying objects
+// (schedules) split by check_type: plain schedules have check_type
+// "none", health checks have a mapping. The list endpoint returns all of
+// them; each page filters to its own kind and creates only that kind.
 export function SchedulesPage() {
+  return <ScheduleManager healthcheck={false} />;
+}
+
+export function HealthChecksPage() {
+  return <ScheduleManager healthcheck={true} />;
+}
+
+function ScheduleManager({ healthcheck }: { healthcheck: boolean }) {
   const { can } = useAuth();
   const canExecute = can("scripts.execute");
   const qc = useQueryClient();
@@ -72,28 +86,37 @@ export function SchedulesPage() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["schedules"] }),
   });
 
-  if (schedules.isLoading) return <p>Loading schedules…</p>;
+  const noun = healthcheck ? "health check" : "schedule";
+
+  if (schedules.isLoading) return <p>Loading {noun}s…</p>;
   if (schedules.error)
     return (
       <p className="error">
-        Failed to load schedules: {(schedules.error as Error).message}
+        Failed to load {noun}s: {(schedules.error as Error).message}
       </p>
     );
 
-  const list = schedules.data?.schedules ?? [];
+  // The two pages share one collection, split by check_type.
+  const list = (schedules.data?.schedules ?? []).filter((s) =>
+    healthcheck ? s.check_type !== "none" : s.check_type === "none",
+  );
 
   return (
     <div>
-      <h1>Schedules</h1>
-      <p className="muted">Cron times are evaluated in UTC.</p>
+      <h1>{healthcheck ? "Health Checks" : "Schedules"}</h1>
+      <p className="muted">
+        {healthcheck
+          ? "Scripts run on a schedule whose result sets each device's health. Cron times are evaluated in UTC."
+          : "Cron times are evaluated in UTC."}
+      </p>
       {canExecute && (
         <p>
           <button type="button" className="primary" onClick={() => setShowCreate(true)}>
-            New schedule
+            New {noun}
           </button>
         </p>
       )}
-      {list.length === 0 && <p className="muted">No schedules.</p>}
+      {list.length === 0 && <p className="muted">No {noun}s.</p>}
       <table className="data">
         <thead>
           <tr>
@@ -101,7 +124,7 @@ export function SchedulesPage() {
             <th>Script</th>
             <th>Cron</th>
             <th>Target</th>
-            <th>Check</th>
+            {healthcheck && <th>Check</th>}
             <th>Status</th>
             <th>Last run</th>
             <th>Next run</th>
@@ -117,7 +140,7 @@ export function SchedulesPage() {
                 <code>{s.cron}</code>
               </td>
               <td>{describeTarget(s.target)}</td>
-              <td>{describeCheck(s)}</td>
+              {healthcheck && <td>{describeCheck(s)}</td>}
               <td>
                 <span className={`badge ${s.enabled ? "on" : "off"}`}>
                   {s.enabled ? "enabled" : "disabled"}
@@ -135,7 +158,7 @@ export function SchedulesPage() {
                       type="button"
                       className="danger"
                       onClick={() => {
-                        if (confirm(`Delete schedule "${s.name}"?`)) deleteMut.mutate(s.id);
+                        if (confirm(`Delete ${noun} "${s.name}"?`)) deleteMut.mutate(s.id);
                       }}
                     >
                       Delete
@@ -151,6 +174,7 @@ export function SchedulesPage() {
       <ErrorText error={toggleMut.error} />
       {showCreate && (
         <CreateScheduleDialog
+          healthcheck={healthcheck}
           onClose={() => setShowCreate(false)}
           onSaved={() => {
             setShowCreate(false);
@@ -163,20 +187,25 @@ export function SchedulesPage() {
 }
 
 function CreateScheduleDialog({
+  healthcheck,
   onClose,
   onSaved,
 }: {
+  healthcheck: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const scripts = useQuery({ queryKey: ["scripts"], queryFn: () => api.listScripts() });
   const [scriptId, setScriptId] = useState("");
   const [name, setName] = useState("");
-  const [preset, setPreset] = useState("0 3 * * *");
+  // Health checks default to every minute; schedules to nightly.
+  const [preset, setPreset] = useState(healthcheck ? "* * * * *" : "0 3 * * *");
   const [customCron, setCustomCron] = useState("");
   const [target, setTarget] = useState<api.JobTarget | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
-  const [checkType, setCheckType] = useState<api.CheckType>("none");
+  const [checkType, setCheckType] = useState<api.CheckType>(
+    healthcheck ? "exit_code" : "none",
+  );
   const [warnCodes, setWarnCodes] = useState("");
   const [confirmation, setConfirmation] = useState<api.DispatchConfirmation | null>(null);
 
@@ -214,7 +243,7 @@ function CreateScheduleDialog({
   }
 
   return (
-    <Modal title="New schedule" onClose={onClose}>
+    <Modal title={healthcheck ? "New health check" : "New schedule"} onClose={onClose}>
       <form style={{ display: "grid", gap: 12 }} onSubmit={onSubmit}>
         <label>
           Name
@@ -260,37 +289,40 @@ function CreateScheduleDialog({
           </label>
         )}
         <TargetPicker onChange={setTarget} />
-        <label>
-          Health check
-          <select
-            value={checkType}
-            onChange={(e) => setCheckType(e.target.value as api.CheckType)}
-          >
-            <option value="none">None (plain schedule)</option>
-            <option value="exit_code">From exit code</option>
-            <option value="output">From output (HEALTH= token)</option>
-          </select>
-        </label>
-        {checkType === "exit_code" && (
-          <label>
-            Warning exit codes
-            <input
-              value={warnCodes}
-              onChange={(e) => setWarnCodes(e.target.value)}
-              placeholder="e.g. 1, 2"
-            />
-            <span className="muted">
-              Exit 0 is healthy; codes listed here are a warning; anything else
-              is critical.
-            </span>
-          </label>
-        )}
-        {checkType === "output" && (
-          <p className="muted">
-            The script must print a <code>HEALTH=healthy</code>,{" "}
-            <code>HEALTH=warning</code>, or <code>HEALTH=critical</code> line.
-            The last match wins.
-          </p>
+        {healthcheck && (
+          <>
+            <label>
+              Health from
+              <select
+                value={checkType}
+                onChange={(e) => setCheckType(e.target.value as api.CheckType)}
+              >
+                <option value="exit_code">Exit code</option>
+                <option value="output">Output (HEALTH= token)</option>
+              </select>
+            </label>
+            {checkType === "exit_code" && (
+              <label>
+                Warning exit codes
+                <input
+                  value={warnCodes}
+                  onChange={(e) => setWarnCodes(e.target.value)}
+                  placeholder="e.g. 1, 2"
+                />
+                <span className="muted">
+                  Exit 0 is healthy; codes listed here are a warning; anything
+                  else is critical.
+                </span>
+              </label>
+            )}
+            {checkType === "output" && (
+              <p className="muted">
+                The script must print a <code>HEALTH=healthy</code>,{" "}
+                <code>HEALTH=warning</code>, or <code>HEALTH=critical</code> line.
+                The last match wins.
+              </p>
+            )}
+          </>
         )}
         {(selectedScript?.parameters ?? []).map((p) => (
           <label key={p.name}>
@@ -309,7 +341,7 @@ function CreateScheduleDialog({
 
         {confirmation ? (
           <div className="warning">
-            This schedule currently targets{" "}
+            This {healthcheck ? "health check" : "schedule"} currently targets{" "}
             <strong>{confirmation.device_count} devices</strong>. Confirm to create it.
           </div>
         ) : (

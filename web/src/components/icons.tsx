@@ -96,6 +96,14 @@ export function SchedulesIcon(p: IconProps) {
   );
 }
 
+export function HealthIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M3 12h4l2 5 4-10 2 5h6" />
+    </Svg>
+  );
+}
+
 export function CustomersIcon(p: IconProps) {
   return (
     <Svg {...p}>

@@ -13,6 +13,7 @@ import {
   DashboardIcon,
   DevicesIcon,
   EnrollIcon,
+  HealthIcon,
   JobsIcon,
   PoliciesIcon,
   SchedulesIcon,
@@ -59,6 +60,12 @@ const NAV: NavGroup[] = [
     title: "Monitoring",
     items: [
       { to: "/alerts", label: "Alerts", icon: AlertsIcon, perm: "alerts.read" },
+      {
+        to: "/health-checks",
+        label: "Health Checks",
+        icon: HealthIcon,
+        perm: "scripts.read",
+      },
       {
         to: "/policies",
         label: "Policies",
