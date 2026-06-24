@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,11 +40,17 @@ type Server struct {
 	// Gateway, when set, is notified to kick live agent connections on
 	// decommission.
 	Gateway *gateway.Gateway
+	// Assistant, when set, enables the in-dashboard AI assistant
+	// (/api/v1/assistant/chat). Nil leaves the endpoint returning 503.
+	Assistant *Assistant
 	// Blobs stores/serves large artifacts (agent release binaries). When
 	// nil, server-hosted release upload/download is unavailable.
 	Blobs storage.Store
 
 	loginLimiter *rateLimiter
+
+	internalOnce    sync.Once
+	internalHandler http.Handler
 }
 
 func NewServer(st *store.Store, box *secrets.Box, log *slog.Logger, cookieSecure bool) *Server {
@@ -101,6 +108,13 @@ func (s *Server) Routes() []Route {
 		{Method: "DELETE", Pattern: "/api/v1/api-tokens/{id}", Perm: auth.PermTokensManage, Handler: s.handleRevokeAPIToken},
 
 		{Method: "GET", Pattern: "/api/v1/audit", Perm: auth.PermAuditRead, Handler: s.handleListAudit},
+
+		// In-dashboard AI assistant. Any authenticated user may chat; each
+		// tool it runs is authorized against the user's own grants.
+		// Configuring it (provider/model/API key) is a tenant-admin action.
+		{Method: "POST", Pattern: "/api/v1/assistant/chat", Perm: PermSelf, Handler: s.handleAssistantChat},
+		{Method: "GET", Pattern: "/api/v1/assistant/settings", Perm: auth.PermTenantManage, Handler: s.handleGetAssistantSettings},
+		{Method: "PUT", Pattern: "/api/v1/assistant/settings", Perm: auth.PermTenantManage, Handler: s.handleUpdateAssistantSettings},
 
 		{Method: "GET", Pattern: "/api/v1/enrollment-tokens", Perm: auth.PermDevicesEnroll, Handler: s.handleListEnrollmentTokens},
 		{Method: "POST", Pattern: "/api/v1/enrollment-tokens", Perm: auth.PermDevicesEnroll, Handler: s.handleCreateEnrollmentToken},

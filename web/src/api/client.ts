@@ -678,6 +678,52 @@ export const updateChannel = (id: string, body: ChannelBody) =>
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
 
+// ---- AI Assistant ----
+
+export interface AssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantToolCall {
+  name: string;
+  input: unknown;
+}
+
+export interface AssistantReply {
+  reply: string;
+  tool_calls: AssistantToolCall[] | null;
+}
+
+// chatAssistant sends the running conversation and returns the assistant's
+// next reply plus the tools it invoked. The server is stateless — pass the
+// full message history each call.
+export const chatAssistant = (messages: AssistantMessage[]) =>
+  request<AssistantReply>("POST", "/assistant/chat", { messages });
+
+export type AssistantProvider = "anthropic" | "mistral";
+
+export interface AssistantSettings {
+  enabled: boolean;
+  provider: AssistantProvider;
+  model: string;
+  key_set: boolean;
+}
+
+export interface AssistantSettingsBody {
+  enabled: boolean;
+  provider: AssistantProvider;
+  model: string;
+  // Omit to keep the stored key; send a non-empty string to replace it.
+  api_key?: string;
+}
+
+export const getAssistantSettings = () =>
+  request<AssistantSettings>("GET", "/assistant/settings");
+
+export const updateAssistantSettings = (body: AssistantSettingsBody) =>
+  request<void>("PUT", "/assistant/settings", body);
+
 // ---- App deployment (apt/dnf package jobs) ----
 
 export type PackageOperation = "install" | "remove";
