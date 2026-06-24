@@ -56,6 +56,51 @@ jobs:
           GOOS: ${{ matrix.goos }}
         run: go vet ./...
 
+  # Build the Windows MSI package using WiX v4 on a real Windows runner.
+  # Uploads rmmagent.exe and rmmagent.msi as build artifacts.
+  package-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: Build agent binary (windows/amd64)
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          New-Item -ItemType Directory -Force packaging/dist | Out-Null
+          go build -ldflags="-s -w" -o packaging/dist/rmmagent-windows-amd64.exe ./cmd/rmmagent
+      - name: Install WiX Toolset v4
+        run: dotnet tool install --global wix --version "4.*"
+      - name: Add WiX to PATH
+        run: echo "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build MSI
+        working-directory: agent/packaging
+        run: wix build -d ProductVersion=0.0.0-dev -o dist/rmmagent-windows-amd64.msi rmmagent.wxs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rmmagent-windows
+          path: |
+            agent/packaging/dist/rmmagent-windows-amd64.exe
+            agent/packaging/dist/rmmagent-windows-amd64.msi
+
+  # Run the Windows-tagged unit tests on a real Windows runner so the
+  # registry/SCM helpers are exercised (build tags exclude them on Linux).
+  agent-windows-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+      - name: Test (windows/amd64)
+        working-directory: agent
+        run: go test ./internal/platform/...
+
   integration:
     runs-on: ubuntu-latest
     services:

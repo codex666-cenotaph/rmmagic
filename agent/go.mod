@@ -2,12 +2,12 @@ module github.com/codex666-cenotaph/rmmagic/agent
 
 go 1.25.11
 
-toolchain go1.25.11
-
 require (
 	github.com/coder/websocket v1.8.14
 	github.com/codex666-cenotaph/rmmagic/shared v0.0.0
+	github.com/google/uuid v1.6.0
 	github.com/shirou/gopsutil/v4 v4.26.5
+	golang.org/x/sys v0.41.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -19,7 +19,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 )
 
 replace github.com/codex666-cenotaph/rmmagic/shared => ../shared

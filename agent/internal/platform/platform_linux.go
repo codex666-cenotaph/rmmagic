@@ -13,6 +13,10 @@ import (
 // DefaultStateDir is where the device identity and command journal live.
 func DefaultStateDir() string { return "/var/lib/rmmagent" }
 
+// HardenStateDir is a no-op on Linux; directory permissions are set by the
+// package installer (nfpm) via the 0700 mode on /var/lib/rmmagent.
+func HardenStateDir(_ string) error { return nil }
+
 // CollectPackages collects installed packages via dpkg-query or rpm.
 // Returns an empty slice (not an error) when no package manager is found.
 func CollectPackages(ctx context.Context) ([]Package, error) {
