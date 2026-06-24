@@ -1,0 +1,2 @@
+# False positives — test fixtures that are not real secrets.
+024c0da1c880c233e9262ba5a7c42cd1050dcec5:server/internal/api/integration_test.go:generic-api-key:267
