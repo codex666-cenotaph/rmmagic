@@ -19,6 +19,30 @@ function describeTarget(t: api.JobTarget): string {
   return "—";
 }
 
+// parseExitCodes turns a comma/space separated list into integer codes,
+// dropping anything that isn't a number.
+function parseExitCodes(s: string): number[] {
+  return s
+    .split(/[\s,]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0)
+    .map((t) => Number(t))
+    .filter((n) => Number.isInteger(n));
+}
+
+function describeCheck(s: api.Schedule): string {
+  switch (s.check_type) {
+    case "exit_code":
+      return s.warning_exit_codes.length
+        ? `exit code (warn: ${s.warning_exit_codes.join(", ")})`
+        : "exit code";
+    case "output":
+      return "output token";
+    default:
+      return "—";
+  }
+}
+
 export function SchedulesPage() {
   const { can } = useAuth();
   const canExecute = can("scripts.execute");
@@ -42,6 +66,8 @@ export function SchedulesPage() {
         timeout_s: s.timeout_s,
         expires_in_s: s.expires_in_s,
         enabled: !s.enabled,
+        check_type: s.check_type,
+        warning_exit_codes: s.warning_exit_codes,
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["schedules"] }),
   });
@@ -75,6 +101,7 @@ export function SchedulesPage() {
             <th>Script</th>
             <th>Cron</th>
             <th>Target</th>
+            <th>Check</th>
             <th>Status</th>
             <th>Last run</th>
             <th>Next run</th>
@@ -90,6 +117,7 @@ export function SchedulesPage() {
                 <code>{s.cron}</code>
               </td>
               <td>{describeTarget(s.target)}</td>
+              <td>{describeCheck(s)}</td>
               <td>
                 <span className={`badge ${s.enabled ? "on" : "off"}`}>
                   {s.enabled ? "enabled" : "disabled"}
@@ -148,6 +176,8 @@ function CreateScheduleDialog({
   const [customCron, setCustomCron] = useState("");
   const [target, setTarget] = useState<api.JobTarget | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
+  const [checkType, setCheckType] = useState<api.CheckType>("none");
+  const [warnCodes, setWarnCodes] = useState("");
   const [confirmation, setConfirmation] = useState<api.DispatchConfirmation | null>(null);
 
   const cron = preset === "custom" ? customCron : preset;
@@ -161,6 +191,9 @@ function CreateScheduleDialog({
         cron,
         target: target!,
         parameters: paramValues,
+        check_type: checkType,
+        warning_exit_codes:
+          checkType === "exit_code" ? parseExitCodes(warnCodes) : undefined,
         confirm_token: confirmToken,
       }),
     onSuccess: onSaved,
@@ -227,6 +260,38 @@ function CreateScheduleDialog({
           </label>
         )}
         <TargetPicker onChange={setTarget} />
+        <label>
+          Health check
+          <select
+            value={checkType}
+            onChange={(e) => setCheckType(e.target.value as api.CheckType)}
+          >
+            <option value="none">None (plain schedule)</option>
+            <option value="exit_code">From exit code</option>
+            <option value="output">From output (HEALTH= token)</option>
+          </select>
+        </label>
+        {checkType === "exit_code" && (
+          <label>
+            Warning exit codes
+            <input
+              value={warnCodes}
+              onChange={(e) => setWarnCodes(e.target.value)}
+              placeholder="e.g. 1, 2"
+            />
+            <span className="muted">
+              Exit 0 is healthy; codes listed here are a warning; anything else
+              is critical.
+            </span>
+          </label>
+        )}
+        {checkType === "output" && (
+          <p className="muted">
+            The script must print a <code>HEALTH=healthy</code>,{" "}
+            <code>HEALTH=warning</code>, or <code>HEALTH=critical</code> line.
+            The last match wins.
+          </p>
+        )}
         {(selectedScript?.parameters ?? []).map((p) => (
           <label key={p.name}>
             {p.name}

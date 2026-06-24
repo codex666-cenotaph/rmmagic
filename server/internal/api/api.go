@@ -123,6 +123,7 @@ func (s *Server) Routes() []Route {
 		{Method: "GET", Pattern: "/api/v1/devices", Perm: auth.PermDevicesRead, Handler: s.handleListDevices},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}", Perm: auth.PermDevicesRead, Handler: s.handleGetDevice},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}/stats", Perm: auth.PermDevicesRead, Handler: s.handleDeviceStats},
+		{Method: "GET", Pattern: "/api/v1/devices/{id}/health", Perm: auth.PermDevicesRead, Handler: s.handleDeviceHealth},
 		{Method: "PUT", Pattern: "/api/v1/devices/{id}/tags", Perm: auth.PermDevicesManage, Handler: s.handleSetDeviceTags},
 		{Method: "POST", Pattern: "/api/v1/devices/{id}/decommission", Perm: auth.PermDevicesManage, Handler: s.handleDecommissionDevice},
 

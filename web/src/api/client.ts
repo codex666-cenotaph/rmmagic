@@ -136,8 +136,22 @@ export interface Device {
   tags: string[];
   update_channel: ReleaseChannel;
   online: boolean;
+  health: HealthStatus;
   last_seen_at: string | null;
   created_at: string;
+}
+
+export type HealthStatus = "healthy" | "warning" | "critical" | "unknown";
+
+export type CheckType = "none" | "exit_code" | "output";
+
+export interface DeviceHealthCheck {
+  schedule_id: string;
+  name: string;
+  status: HealthStatus;
+  message: string;
+  job_id: string | null;
+  checked_at: string;
 }
 
 export interface DiskSample {
@@ -381,6 +395,8 @@ export interface Schedule {
   timeout_s: number;
   expires_in_s: number;
   enabled: boolean;
+  check_type: CheckType;
+  warning_exit_codes: number[];
   next_run_at: string;
   last_run_at: string | null;
   created_at: string;
@@ -474,6 +490,8 @@ export interface ScheduleBody {
   timeout_s?: number;
   expires_in_s?: number;
   enabled?: boolean;
+  check_type?: CheckType;
+  warning_exit_codes?: number[];
   confirm_token?: string;
 }
 
@@ -485,6 +503,12 @@ export const updateSchedule = (id: string, body: ScheduleBody) =>
 
 export const deleteSchedule = (id: string) =>
   request<void>("DELETE", `/schedules/${id}`);
+
+export const getDeviceHealth = (deviceId: string) =>
+  request<{ health: HealthStatus; checks: DeviceHealthCheck[] }>(
+    "GET",
+    `/devices/${deviceId}/health`,
+  );
 
 // ---- Inventory ----
 

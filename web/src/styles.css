@@ -455,7 +455,8 @@ table.data-table tbody tr:hover {
   border-color: transparent;
 }
 
-.badge-error {
+.badge-error,
+.badge-crit {
   background: var(--error-bg);
   color: var(--error-fg);
   border-color: transparent;

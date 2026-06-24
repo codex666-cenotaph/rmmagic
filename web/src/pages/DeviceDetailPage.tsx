@@ -8,10 +8,12 @@ import {
   ErrorText,
   fmtBytes,
   fmtRelative,
+  fmtTime,
+  HealthBadge,
 } from "../components/ui";
 import { StatCard } from "../components/charts";
 
-type Tab = "stats" | "inventory" | "alerts";
+type Tab = "stats" | "inventory" | "health" | "alerts";
 
 export function DeviceDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
@@ -40,6 +42,12 @@ export function DeviceDetailPage() {
     queryKey: ["alerts", "device", id],
     queryFn: () => api.listAlerts({ device_id: id, limit: 100 }),
     enabled: tab === "alerts",
+  });
+  const health = useQuery({
+    queryKey: ["device-health", id],
+    queryFn: () => api.getDeviceHealth(id),
+    refetchInterval: 30_000,
+    enabled: tab === "health",
   });
 
   const decommissionMut = useMutation({
@@ -84,6 +92,7 @@ export function DeviceDetailPage() {
             <span className={`status-dot ${dotClass}`} aria-hidden="true" />
             <h1>{d.hostname}</h1>
             <DeviceStatusBadge status={d.status} online={d.online} />
+            <HealthBadge status={d.health} />
           </div>
           <div className="hero-meta">
             <MetaItem label="Customer" value={d.customer_name} />
@@ -133,7 +142,7 @@ export function DeviceDetailPage() {
       <TagsEditor device={d} canManage={canManage} />
 
       <div className="tabs">
-        {(["stats", "inventory", "alerts"] as Tab[]).map((t) => (
+        {(["stats", "inventory", "health", "alerts"] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
@@ -164,6 +173,14 @@ export function DeviceDetailPage() {
         />
       )}
 
+      {tab === "health" && (
+        <HealthTab
+          checks={health.data?.checks ?? []}
+          isLoading={health.isLoading}
+          error={health.error}
+        />
+      )}
+
       {tab === "alerts" && (
         <AlertsTab
           alerts={deviceAlerts.data?.alerts ?? []}
@@ -171,6 +188,52 @@ export function DeviceDetailPage() {
           error={deviceAlerts.error}
         />
       )}
+    </div>
+  );
+}
+
+function HealthTab({
+  checks,
+  isLoading,
+  error,
+}: {
+  checks: api.DeviceHealthCheck[];
+  isLoading: boolean;
+  error: unknown;
+}) {
+  if (isLoading) return <p>Loading health checks…</p>;
+  if (error) return <ErrorText error={error} />;
+  if (checks.length === 0)
+    return (
+      <p className="muted">
+        No health checks have reported for this device yet. Create a schedule
+        with a check type to start monitoring health.
+      </p>
+    );
+  return (
+    <div className="card table-card">
+      <table className="data">
+        <thead>
+          <tr>
+            <th>Check</th>
+            <th>Status</th>
+            <th>Detail</th>
+            <th>Last checked</th>
+          </tr>
+        </thead>
+        <tbody>
+          {checks.map((c) => (
+            <tr key={c.schedule_id}>
+              <td>{c.name}</td>
+              <td>
+                <HealthBadge status={c.status} />
+              </td>
+              <td className="muted">{c.message || "—"}</td>
+              <td className="muted">{fmtTime(c.checked_at)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

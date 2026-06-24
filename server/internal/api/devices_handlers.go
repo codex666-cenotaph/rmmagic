@@ -19,35 +19,41 @@ import (
 const onlineWindow = 90 * time.Second
 
 type deviceJSON struct {
-	ID           uuid.UUID  `json:"id"`
-	SiteID       uuid.UUID  `json:"site_id"`
-	SiteName     string     `json:"site_name"`
-	CustomerID   uuid.UUID  `json:"customer_id"`
-	CustomerName string     `json:"customer_name"`
-	Hostname     string     `json:"hostname"`
-	OS           string     `json:"os"`
-	Arch          string     `json:"arch"`
-	AgentVersion  string     `json:"agent_version"`
-	Status        string     `json:"status"`
-	Tags          []string   `json:"tags"`
-	UpdateChannel string     `json:"update_channel"`
-	Online        bool       `json:"online"`
-	LastSeenAt    *time.Time `json:"last_seen_at"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            uuid.UUID `json:"id"`
+	SiteID        uuid.UUID `json:"site_id"`
+	SiteName      string    `json:"site_name"`
+	CustomerID    uuid.UUID `json:"customer_id"`
+	CustomerName  string    `json:"customer_name"`
+	Hostname      string    `json:"hostname"`
+	OS            string    `json:"os"`
+	Arch          string    `json:"arch"`
+	AgentVersion  string    `json:"agent_version"`
+	Status        string    `json:"status"`
+	Tags          []string  `json:"tags"`
+	UpdateChannel string    `json:"update_channel"`
+	Online        bool      `json:"online"`
+	// Health is the worst of the device's health checks: healthy /
+	// warning / critical, or "unknown" when no check has reported.
+	Health     string     `json:"health"`
+	LastSeenAt *time.Time `json:"last_seen_at"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
-func toDeviceJSON(d store.Device) deviceJSON {
+func toDeviceJSON(d store.Device, health string) deviceJSON {
 	online := d.Status == "active" && d.LastSeenAt != nil && time.Since(*d.LastSeenAt) < onlineWindow
 	tags := d.Tags
 	if tags == nil {
 		tags = []string{}
+	}
+	if health == "" {
+		health = store.HealthUnknown
 	}
 	return deviceJSON{
 		ID: d.ID, SiteID: d.SiteID, SiteName: d.SiteName,
 		CustomerID: d.CustomerID, CustomerName: d.CustomerName,
 		Hostname: d.Hostname, OS: d.OS, Arch: d.Arch,
 		AgentVersion: d.AgentVersion, Status: d.Status, Tags: tags,
-		UpdateChannel: d.UpdateChannel, Online: online,
+		UpdateChannel: d.UpdateChannel, Online: online, Health: health,
 		LastSeenAt: d.LastSeenAt, CreatedAt: d.CreatedAt,
 	}
 }
@@ -62,6 +68,10 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		health, err := store.DeviceHealthMap(ctx, tx)
+		if err != nil {
+			return err
+		}
 		all := p.HasTenantWide(auth.PermDevicesRead)
 		allowedCustomers := map[uuid.UUID]bool{}
 		if !all {
@@ -71,12 +81,12 @@ func (s *Server) handleListDevices(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, d := range devices {
 			if all || allowedCustomers[d.CustomerID] {
-				out = append(out, toDeviceJSON(d))
+				out = append(out, toDeviceJSON(d, health[d.ID]))
 				continue
 			}
 			// Site-scoped grants.
 			if requireInTx(ctx, tx, auth.PermDevicesRead, auth.Scope{Type: auth.ScopeSite, ID: d.SiteID}) == nil {
-				out = append(out, toDeviceJSON(d))
+				out = append(out, toDeviceJSON(d, health[d.ID]))
 			}
 		}
 		return nil
@@ -109,16 +119,64 @@ func (s *Server) handleGetDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var d store.Device
+	var checks []store.DeviceHealthCheck
 	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
 		var err error
 		d, err = getAuthorizedDevice(r, tx, auth.PermDevicesRead, id)
+		if err != nil {
+			return err
+		}
+		checks, err = store.ListDeviceHealth(ctx, tx, id)
 		return err
 	})
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toDeviceJSON(d))
+	writeJSON(w, http.StatusOK, toDeviceJSON(d, worstHealth(checks)))
+}
+
+// worstHealth reduces a device's checks to a single overall status.
+// ListDeviceHealth returns them worst-first, so the head wins; no checks
+// means unknown.
+func worstHealth(checks []store.DeviceHealthCheck) string {
+	if len(checks) == 0 {
+		return store.HealthUnknown
+	}
+	return checks[0].Status
+}
+
+// handleDeviceHealth returns the latest result of every health check that
+// has run on the device.
+func (s *Server) handleDeviceHealth(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p, _ := auth.PrincipalFrom(ctx)
+	id, ok := pathUUID(w, r, "id")
+	if !ok {
+		return
+	}
+	checks := []store.DeviceHealthCheck{}
+	err := s.Store.WithTenant(ctx, p.TenantID, func(tx pgx.Tx) error {
+		if _, err := getAuthorizedDevice(r, tx, auth.PermDevicesRead, id); err != nil {
+			return err
+		}
+		c, err := store.ListDeviceHealth(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if c != nil {
+			checks = c
+		}
+		return nil
+	})
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"health": worstHealth(checks),
+		"checks": checks,
+	})
 }
 
 func (s *Server) handleDeviceStats(w http.ResponseWriter, r *http.Request) {

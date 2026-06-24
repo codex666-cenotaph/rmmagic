@@ -56,9 +56,10 @@ Requested permissions must be a subset of the caller's own.
 
 | Method/Path | Permission | Body / Response |
 |---|---|---|
-| GET /devices | devices.read | `{devices: [{id, site_id, site_name, customer_id, customer_name, hostname, os, arch, agent_version, status: "active"\|"decommissioned", online: bool, last_seen_at, created_at}]}` (scope-filtered) |
-| GET /devices/{id} | devices.read | one device object (shape above) |
+| GET /devices | devices.read | `{devices: [{id, site_id, site_name, customer_id, customer_name, hostname, os, arch, agent_version, status: "active"\|"decommissioned", online: bool, health: "healthy"\|"warning"\|"critical"\|"unknown", last_seen_at, created_at}]}` (scope-filtered) |
+| GET /devices/{id} | devices.read | one device object (shape above); `health` is the worst of its checks |
 | GET /devices/{id}/stats?since=RFC3339&until=RFC3339 | devices.read | `{samples: [{ts, cpu_pct, mem_used, mem_total, disks: [{mount, used, total}], net: {rx_bytes, tx_bytes}}]}` ascending by ts; default window = last hour |
+| GET /devices/{id}/health | devices.read | `{health, checks: [{schedule_id, name, status, message, job_id, checked_at}]}` — latest result of each health check, worst first |
 | POST /devices/{id}/decommission | devices.manage | 200 `{}` — revokes the device identity and disconnects a live agent |
 
 ## Enrollment tokens
@@ -202,8 +203,8 @@ Cron-style recurring dispatch, evaluated in UTC by the worker role.
 
 | Method/Path | Permission | Body / Response |
 |---|---|---|
-| GET /schedules | scripts.read | `{schedules: [{id, script_id, script_name, name, cron, target, parameters, timeout_s, expires_in_s, enabled, next_run_at, last_run_at, created_at}]}` |
-| POST /schedules | scripts.execute | `{script_id, name, cron, target, parameters?, timeout_s?, expires_in_s?, enabled?, confirm_token?}` → 201 `{id, next_run_at}` |
+| GET /schedules | scripts.read | `{schedules: [{id, script_id, script_name, name, cron, target, parameters, timeout_s, expires_in_s, enabled, check_type, warning_exit_codes, next_run_at, last_run_at, created_at}]}` |
+| POST /schedules | scripts.execute | `{script_id, name, cron, target, parameters?, timeout_s?, expires_in_s?, enabled?, check_type?, warning_exit_codes?, confirm_token?}` → 201 `{id, next_run_at}` |
 | GET /schedules/{id} | scripts.read | one schedule object |
 | PUT /schedules/{id} | scripts.execute | same body as POST → 200 |
 | DELETE /schedules/{id} | scripts.execute | 204 |
@@ -214,6 +215,23 @@ confirmation as dispatch, using the target's current resolution. Each
 firing creates one job per active device in the target and is audited as
 `schedule.run` (actor `system`). Missed firings (worker down) are not
 replayed; the next run is computed from the current time.
+
+### Health checks
+
+A schedule with `check_type` other than `none` is a **health check**: it
+runs its script through the normal job pipeline, and each completed job's
+result is mapped to a per-device health state (`healthy` / `warning` /
+`critical`). A device's overall `health` is the worst of its checks;
+devices with no check results report `unknown`.
+
+- `check_type: "exit_code"` — exit `0` is healthy, any code listed in
+  `warning_exit_codes` is a warning, anything else (including timeout or
+  failure) is critical.
+- `check_type: "output"` — the script prints a `HEALTH=healthy|warning|critical`
+  token on stdout (case-insensitive, `ok`/`pass`/`warn`/`fail` aliases
+  accepted); the last match wins. No token yields `unknown`.
+
+Results are read via `GET /devices/{id}/health`.
 
 ## Audit log
 

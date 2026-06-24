@@ -228,7 +228,12 @@ func (g *Gateway) handleCommandResult(ctx context.Context, tenantID uuid.UUID, r
 	}
 
 	if err := g.Store.WithTenant(ctx, tenantID, func(tx pgx.Tx) error {
-		return store.CompleteJob(ctx, tx, res.CommandId, statusStr, output, exitCode, startedAt, finishedAt)
+		if err := store.CompleteJob(ctx, tx, res.CommandId, statusStr, output, exitCode, startedAt, finishedAt); err != nil {
+			return err
+		}
+		// If this job came from a health-check schedule, map its result to
+		// the device's health state. No-op for ordinary jobs.
+		return store.RecordJobHealth(ctx, tx, res.CommandId, exitCode, output)
 	}); err != nil {
 		g.Log.Error("complete job failed", "command_id", res.CommandId, "error", err)
 	}

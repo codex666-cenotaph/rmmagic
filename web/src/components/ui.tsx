@@ -101,3 +101,24 @@ export function DeviceStatusBadge({
     </span>
   );
 }
+
+const HEALTH_LABEL: Record<string, string> = {
+  healthy: "healthy",
+  warning: "warning",
+  critical: "critical",
+  unknown: "no checks",
+};
+
+// HealthBadge renders a device's overall health (worst of its checks).
+// "unknown" means no health check has reported for the device yet.
+export function HealthBadge({ status }: { status: string }) {
+  const cls =
+    status === "healthy"
+      ? "badge-ok"
+      : status === "warning"
+        ? "badge-warn"
+        : status === "critical"
+          ? "badge-crit"
+          : "";
+  return <span className={`badge ${cls}`}>{HEALTH_LABEL[status] ?? status}</span>;
+}

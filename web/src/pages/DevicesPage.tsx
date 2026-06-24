@@ -8,6 +8,7 @@ import {
   DeviceStatusBadge,
   ErrorText,
   fmtRelative,
+  HealthBadge,
 } from "../components/ui";
 import { CHART, Donut, StatCard } from "../components/charts";
 
@@ -159,6 +160,7 @@ export function DevicesPage() {
                   <th>OS</th>
                   <th>Agent</th>
                   <th>Status</th>
+                  <th>Health</th>
                   <th>Last seen</th>
                   <th>Actions</th>
                 </tr>
@@ -228,6 +230,9 @@ export function DevicesPage() {
                           />
                         </span>
                       </td>
+                      <td>
+                        <HealthBadge status={d.health} />
+                      </td>
                       <td className="muted">{fmtRelative(d.last_seen_at)}</td>
                       <td>
                         {canManage && d.status !== "decommissioned" && (
@@ -252,7 +257,7 @@ export function DevicesPage() {
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="muted">
+                    <td colSpan={8} className="muted">
                       No devices match “{filter}”.
                     </td>
                   </tr>

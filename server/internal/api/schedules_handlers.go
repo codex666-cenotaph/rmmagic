@@ -17,40 +17,49 @@ import (
 // wall-clock time by the worker.
 
 type scheduleJSON struct {
-	ID         uuid.UUID       `json:"id"`
-	ScriptID   uuid.UUID       `json:"script_id"`
-	ScriptName string          `json:"script_name"`
-	Name       string          `json:"name"`
-	Cron       string          `json:"cron"`
-	Target     json.RawMessage `json:"target"`
-	Parameters json.RawMessage `json:"parameters"`
-	TimeoutS   int             `json:"timeout_s"`
-	ExpiresInS int             `json:"expires_in_s"`
-	Enabled    bool            `json:"enabled"`
-	NextRunAt  time.Time       `json:"next_run_at"`
-	LastRunAt  *time.Time      `json:"last_run_at"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ID               uuid.UUID       `json:"id"`
+	ScriptID         uuid.UUID       `json:"script_id"`
+	ScriptName       string          `json:"script_name"`
+	Name             string          `json:"name"`
+	Cron             string          `json:"cron"`
+	Target           json.RawMessage `json:"target"`
+	Parameters       json.RawMessage `json:"parameters"`
+	TimeoutS         int             `json:"timeout_s"`
+	ExpiresInS       int             `json:"expires_in_s"`
+	Enabled          bool            `json:"enabled"`
+	CheckType        string          `json:"check_type"`
+	WarningExitCodes []int32         `json:"warning_exit_codes"`
+	NextRunAt        time.Time       `json:"next_run_at"`
+	LastRunAt        *time.Time      `json:"last_run_at"`
+	CreatedAt        time.Time       `json:"created_at"`
 }
 
 func toScheduleJSON(s store.Schedule) scheduleJSON {
+	codes := s.WarningExitCodes
+	if codes == nil {
+		codes = []int32{}
+	}
 	return scheduleJSON{
 		ID: s.ID, ScriptID: s.ScriptID, ScriptName: s.ScriptName,
 		Name: s.Name, Cron: s.Cron, Target: s.Target, Parameters: s.Parameters,
 		TimeoutS: s.TimeoutS, ExpiresInS: s.ExpiresInS, Enabled: s.Enabled,
+		CheckType: s.CheckType, WarningExitCodes: codes,
 		NextRunAt: s.NextRunAt, LastRunAt: s.LastRunAt, CreatedAt: s.CreatedAt,
 	}
 }
 
 type scheduleBody struct {
-	ScriptID     uuid.UUID       `json:"script_id"`
-	Name         string          `json:"name"`
-	Cron         string          `json:"cron"`
-	Target       store.JobTarget `json:"target"`
-	Parameters   json.RawMessage `json:"parameters"`
-	TimeoutS     int             `json:"timeout_s"`
-	ExpiresInS   int             `json:"expires_in_s"`
-	Enabled      *bool           `json:"enabled"`
-	ConfirmToken string          `json:"confirm_token"`
+	ScriptID         uuid.UUID       `json:"script_id"`
+	Name             string          `json:"name"`
+	Cron             string          `json:"cron"`
+	Target           store.JobTarget `json:"target"`
+	Parameters       json.RawMessage `json:"parameters"`
+	TimeoutS         int             `json:"timeout_s"`
+	ExpiresInS       int             `json:"expires_in_s"`
+	Enabled          *bool           `json:"enabled"`
+	CheckType        string          `json:"check_type"`
+	WarningExitCodes []int32         `json:"warning_exit_codes"`
+	ConfirmToken     string          `json:"confirm_token"`
 }
 
 // validate normalizes defaults and returns (cron schedule, error message).
@@ -86,6 +95,19 @@ func (b *scheduleBody) validate() (cron.Schedule, string) {
 	var tmp map[string]string
 	if err := json.Unmarshal(b.Parameters, &tmp); err != nil {
 		return nil, "parameters must be a JSON object of string values"
+	}
+	if b.CheckType == "" {
+		b.CheckType = store.CheckNone
+	}
+	switch b.CheckType {
+	case store.CheckNone, store.CheckOutput:
+		b.WarningExitCodes = nil
+	case store.CheckExitCode:
+		if b.WarningExitCodes == nil {
+			b.WarningExitCodes = []int32{}
+		}
+	default:
+		return nil, "check_type must be one of none, exit_code, output"
 	}
 	return sched, ""
 }
@@ -188,7 +210,7 @@ func (s *Server) upsertSchedule(w http.ResponseWriter, r *http.Request, id uuid.
 		if id == uuid.Nil {
 			id, err = store.CreateSchedule(ctx, tx, p.TenantID, req.ScriptID, p.UserID,
 				req.Name, req.Cron, targetJSON, req.Parameters,
-				req.TimeoutS, req.ExpiresInS, enabled, nextRun)
+				req.TimeoutS, req.ExpiresInS, enabled, req.CheckType, req.WarningExitCodes, nextRun)
 			if err != nil {
 				return err
 			}
@@ -201,7 +223,7 @@ func (s *Server) upsertSchedule(w http.ResponseWriter, r *http.Request, id uuid.
 		}
 		if err := store.UpdateSchedule(ctx, tx, id,
 			req.Name, req.Cron, targetJSON, req.Parameters,
-			req.TimeoutS, req.ExpiresInS, enabled, nextRun); err != nil {
+			req.TimeoutS, req.ExpiresInS, enabled, req.CheckType, req.WarningExitCodes, nextRun); err != nil {
 			return err
 		}
 		return recordAudit(ctx, tx, "schedule.update", "schedule", id,
