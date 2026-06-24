@@ -120,12 +120,10 @@ func DeleteSchedule(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 // locks (SKIP LOCKED) make concurrent worker ticks claim disjoint sets;
 // the caller must advance next_run_at in the same transaction.
 func ClaimDueSchedules(ctx context.Context, tx pgx.Tx, limit int) ([]Schedule, error) {
-	rows, err := tx.Query(ctx, `
-		SELECT sc.id, sc.script_id, s.name, sc.name, sc.cron, sc.target, sc.parameters,
-		       sc.timeout_s, sc.expires_in_s, sc.enabled, sc.next_run_at, sc.last_run_at,
-		       sc.created_at, sc.updated_at
-		FROM schedules sc
-		JOIN scripts s ON s.id = sc.script_id
+	// Reuse scheduleSelect so the column list can never drift from
+	// scanSchedule again; scheduleSelect's FROM aliases (sc, s) are what
+	// the WHERE/FOR UPDATE clauses below reference.
+	rows, err := tx.Query(ctx, scheduleSelect+`
 		WHERE sc.enabled AND sc.next_run_at <= now()
 		ORDER BY sc.next_run_at
 		LIMIT $1
