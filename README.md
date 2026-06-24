@@ -11,6 +11,7 @@ Management) platform for MSPs. Go control plane + Go endpoint agent
 | `server/` | Control plane: REST API, agent gateway (WSS), worker/scheduler — one binary, role flags |
 | `agent/` | Endpoint agent: enrollment, heartbeat, script/package execution, remote shell |
 | `shared/` | Protocol types and version info shared by server and agent |
+| `mcp/` | Model Context Protocol server — connects AI agents to the REST API |
 | `proto/` | Protobuf definitions of the agent↔server wire protocol |
 | `web/` | React + TypeScript dashboard |
 | `docs/` | Architecture decisions, threat model, plan |

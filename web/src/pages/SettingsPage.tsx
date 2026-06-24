@@ -1,11 +1,11 @@
-import { FormEvent, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { FormEvent, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api/client";
 import { useAuth } from "../auth";
 import { CopyButton, ErrorText } from "../components/ui";
 
 export function SettingsPage() {
-  const { me } = useAuth();
+  const { me, can } = useAuth();
 
   return (
     <div>
@@ -18,6 +18,130 @@ export function SettingsPage() {
         </p>
       </div>
       <MfaSection />
+      {can("tenant.manage") && <AssistantSection />}
+    </div>
+  );
+}
+
+// Default model ids surfaced as placeholders per provider.
+const PROVIDER_MODELS: Record<api.AssistantProvider, string> = {
+  anthropic: "claude-opus-4-8",
+  mistral: "mistral-large-latest",
+};
+
+function AssistantSection() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["assistant-settings"],
+    queryFn: api.getAssistantSettings,
+  });
+
+  const [enabled, setEnabled] = useState(false);
+  const [provider, setProvider] = useState<api.AssistantProvider>("anthropic");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  // Hydrate the form once settings load.
+  useEffect(() => {
+    if (data) {
+      setEnabled(data.enabled);
+      setProvider(data.provider);
+      setModel(data.model);
+    }
+  }, [data]);
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      api.updateAssistantSettings({
+        enabled,
+        provider,
+        model: model.trim(),
+        // Only send the key when the admin typed a new one.
+        api_key: apiKey.trim() ? apiKey.trim() : undefined,
+      }),
+    onSuccess: () => {
+      setApiKey("");
+      setSaved(true);
+      void qc.invalidateQueries({ queryKey: ["assistant-settings"] });
+    },
+  });
+
+  function onSave(e: FormEvent) {
+    e.preventDefault();
+    setSaved(false);
+    saveMut.mutate();
+  }
+
+  const keySet = data?.key_set ?? false;
+
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0, fontSize: 17 }}>AI assistant</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        Configure the "Ask AI" assistant. The model can read your fleet and run
+        the same actions you can — its tools run with each user's own
+        permissions. The API key is stored encrypted and never shown again.
+      </p>
+      {isLoading ? (
+        <p className="muted">Loading…</p>
+      ) : (
+        <form className="inline-form" onSubmit={onSave} style={{ flexDirection: "column", alignItems: "stretch", gap: 12 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            Enable the assistant for this tenant
+          </label>
+
+          <label>
+            Provider
+            <select
+              value={provider}
+              onChange={(e) =>
+                setProvider(e.target.value as api.AssistantProvider)
+              }
+            >
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="mistral">Mistral AI</option>
+            </select>
+          </label>
+
+          <label>
+            Model
+            <input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={PROVIDER_MODELS[provider]}
+            />
+          </label>
+
+          <label>
+            API key
+            <input
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={
+                keySet ? "•••••••• (stored — leave blank to keep)" : "Paste API key"
+              }
+            />
+          </label>
+
+          <div className="row-actions">
+            <button type="submit" className="primary" disabled={saveMut.isPending}>
+              {saveMut.isPending ? "Saving…" : "Save"}
+            </button>
+            {saved && !saveMut.isPending && (
+              <span className="badge on">saved</span>
+            )}
+          </div>
+          <ErrorText error={saveMut.error} />
+        </form>
+      )}
     </div>
   );
 }

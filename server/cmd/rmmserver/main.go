@@ -176,6 +176,12 @@ func runServe(log *slog.Logger) {
 			srv := api.NewServer(st, box, log, cookieSecure)
 			srv.Gateway = gw
 			srv.Blobs = openBlobs(log)
+			// Optional in-dashboard AI assistant. Enabled only when an
+			// Anthropic API key is configured; otherwise the endpoint 503s.
+			if key := os.Getenv("RMM_ANTHROPIC_API_KEY"); key != "" {
+				srv.Assistant = api.NewAssistant(key, os.Getenv("RMM_ASSISTANT_MODEL"))
+				log.Info("AI assistant enabled")
+			}
 			mux.Handle("/api/v1/", srv.Handler())
 			mux.Handle("/agent/v1/enroll", srv.Handler())
 			mux.Handle("/agent/v1/stats", srv.Handler())

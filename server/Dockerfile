@@ -2,11 +2,14 @@ FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
-# Copy workspace and modules first for layer caching
+# Copy workspace and modules first for layer caching. Every module listed
+# in go.work must be present for the build, even ones this binary does not
+# import (the mcp module ships the standalone MCP server).
 COPY go.work go.work.sum* ./
 COPY shared/ ./shared/
 COPY server/ ./server/
 COPY agent/ ./agent/
+COPY mcp/ ./mcp/
 
 RUN CGO_ENABLED=0 go build -o /app/rmmserver ./server/cmd/rmmserver
 
