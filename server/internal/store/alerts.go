@@ -11,24 +11,28 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Alert is serialized directly to API clients; the JSON tags must match the
+// snake_case shape the dashboard expects (docs/API.md). Without them the
+// default PascalCase field names ship and the Alerts page reads undefined
+// fields — the same class of crash the Policies page hit.
 type Alert struct {
-	ID         uuid.UUID
-	DeviceID   uuid.UUID
-	Hostname   string
-	SiteID     uuid.UUID
-	CustomerID uuid.UUID
-	PolicyID   *uuid.UUID
-	RuleType   string
-	DedupKey   string
-	Severity   string
-	Message    string
-	Details    json.RawMessage
-	ChannelIDs []uuid.UUID
-	Status     string
-	FiredAt    time.Time
-	ResolvedAt *time.Time
-	AckedBy    *uuid.UUID
-	AckedAt    *time.Time
+	ID         uuid.UUID       `json:"id"`
+	DeviceID   uuid.UUID       `json:"device_id"`
+	Hostname   string          `json:"hostname"`
+	SiteID     uuid.UUID       `json:"site_id"`
+	CustomerID uuid.UUID       `json:"customer_id"`
+	PolicyID   *uuid.UUID      `json:"policy_id"`
+	RuleType   string          `json:"rule_type"`
+	DedupKey   string          `json:"dedup_key"`
+	Severity   string          `json:"severity"`
+	Message    string          `json:"message"`
+	Details    json.RawMessage `json:"details"`
+	ChannelIDs []uuid.UUID     `json:"channel_ids"`
+	Status     string          `json:"status"`
+	FiredAt    time.Time       `json:"fired_at"`
+	ResolvedAt *time.Time      `json:"resolved_at"`
+	AckedBy    *uuid.UUID      `json:"acked_by"`
+	AckedAt    *time.Time      `json:"acked_at"`
 }
 
 const alertSelect = `
@@ -193,6 +197,7 @@ type EvalDevice struct {
 	DeviceID   uuid.UUID
 	SiteID     uuid.UUID
 	CustomerID uuid.UUID
+	Tags       []string
 	Hostname   string
 	LastSeenAt *time.Time
 
@@ -210,7 +215,7 @@ type EvalDevice struct {
 // three set-based queries instead of per-device round trips.
 func CollectEvalDevices(ctx context.Context, tx pgx.Tx, window time.Duration) ([]EvalDevice, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT d.id, d.site_id, s.customer_id, d.hostname, d.last_seen_at
+		SELECT d.id, d.site_id, s.customer_id, d.tags, d.hostname, d.last_seen_at
 		FROM devices d JOIN sites s ON s.id = d.site_id
 		WHERE d.status = 'active'`)
 	if err != nil {
@@ -221,7 +226,7 @@ func CollectEvalDevices(ctx context.Context, tx pgx.Tx, window time.Duration) ([
 	idx := map[uuid.UUID]int{}
 	for rows.Next() {
 		var d EvalDevice
-		if err := rows.Scan(&d.DeviceID, &d.SiteID, &d.CustomerID, &d.Hostname, &d.LastSeenAt); err != nil {
+		if err := rows.Scan(&d.DeviceID, &d.SiteID, &d.CustomerID, &d.Tags, &d.Hostname, &d.LastSeenAt); err != nil {
 			return nil, err
 		}
 		idx[d.DeviceID] = len(out)

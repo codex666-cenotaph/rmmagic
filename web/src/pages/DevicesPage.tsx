@@ -59,7 +59,7 @@ export function DevicesPage() {
     const q = filter.trim().toLowerCase();
     if (!q) return list;
     return list.filter((d) =>
-      [d.hostname, d.customer_name, d.site_name, d.os, d.agent_version]
+      [d.hostname, d.customer_name, d.site_name, d.os, d.agent_version, ...(d.tags ?? [])]
         .join(" ")
         .toLowerCase()
         .includes(q),
@@ -183,6 +183,20 @@ export function DevicesPage() {
                         <Link to={`/devices/${d.id}`} className="device-link">
                           {d.hostname}
                         </Link>
+                        {(d.tags ?? []).length > 0 && (
+                          <span className="tag-row inline">
+                            {d.tags.map((t) => (
+                              <span
+                                key={t}
+                                className={
+                                  t === "server" ? "badge badge-ok" : "badge"
+                                }
+                              >
+                                {t}
+                              </span>
+                            ))}
+                          </span>
+                        )}
                       </td>
                       <td>
                         {d.customer_name}{" "}

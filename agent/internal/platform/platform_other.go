@@ -2,7 +2,24 @@
 
 package platform
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// errPackagesUnsupported is returned by the package-management entry points
+// on OSes without a supported package manager.
+var errPackagesUnsupported = errors.New("package management is not supported on this OS")
+
+// InstallPackages is unsupported on this OS.
+func InstallPackages(_ context.Context, _ []string) ([]byte, error) {
+	return nil, errPackagesUnsupported
+}
+
+// RemovePackages is unsupported on this OS.
+func RemovePackages(_ context.Context, _ []string) ([]byte, error) {
+	return nil, errPackagesUnsupported
+}
 
 // Fallback for development hosts (e.g. darwin): the agent builds and runs,
 // inventory sources are simply empty.

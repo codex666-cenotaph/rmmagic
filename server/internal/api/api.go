@@ -18,6 +18,7 @@ import (
 	"github.com/codex666-cenotaph/rmmagic/server/internal/auth"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/gateway"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/secrets"
+	"github.com/codex666-cenotaph/rmmagic/server/internal/storage"
 	"github.com/codex666-cenotaph/rmmagic/server/internal/store"
 )
 
@@ -38,6 +39,9 @@ type Server struct {
 	// Gateway, when set, is notified to kick live agent connections on
 	// decommission.
 	Gateway *gateway.Gateway
+	// Blobs stores/serves large artifacts (agent release binaries). When
+	// nil, server-hosted release upload/download is unavailable.
+	Blobs storage.Store
 
 	loginLimiter *rateLimiter
 }
@@ -105,6 +109,7 @@ func (s *Server) Routes() []Route {
 		{Method: "GET", Pattern: "/api/v1/devices", Perm: auth.PermDevicesRead, Handler: s.handleListDevices},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}", Perm: auth.PermDevicesRead, Handler: s.handleGetDevice},
 		{Method: "GET", Pattern: "/api/v1/devices/{id}/stats", Perm: auth.PermDevicesRead, Handler: s.handleDeviceStats},
+		{Method: "PUT", Pattern: "/api/v1/devices/{id}/tags", Perm: auth.PermDevicesManage, Handler: s.handleSetDeviceTags},
 		{Method: "POST", Pattern: "/api/v1/devices/{id}/decommission", Perm: auth.PermDevicesManage, Handler: s.handleDecommissionDevice},
 
 		{Method: "GET", Pattern: "/api/v1/scripts", Perm: auth.PermScriptsRead, Handler: s.handleListScripts},
@@ -113,6 +118,15 @@ func (s *Server) Routes() []Route {
 		{Method: "PATCH", Pattern: "/api/v1/scripts/{id}", Perm: auth.PermScriptsManage, Handler: s.handleUpdateScript},
 		{Method: "DELETE", Pattern: "/api/v1/scripts/{id}", Perm: auth.PermScriptsManage, Handler: s.handleArchiveScript},
 		{Method: "POST", Pattern: "/api/v1/scripts/{id}/dispatch", Perm: auth.PermScriptsExecute, Handler: s.handleDispatchJob},
+
+		{Method: "POST", Pattern: "/api/v1/apps/deploy", Perm: auth.PermAppsDeploy, Handler: s.handleDeployApp},
+
+		{Method: "GET", Pattern: "/api/v1/agent-releases", Perm: auth.PermDevicesRead, Handler: s.handleListReleases},
+		{Method: "POST", Pattern: "/api/v1/agent-releases", Perm: auth.PermAgentUpdate, Handler: s.handleCreateRelease},
+		{Method: "POST", Pattern: "/api/v1/agent-releases/{id}/binary", Perm: auth.PermAgentUpdate, Handler: s.handleUploadReleaseBinary},
+		{Method: "POST", Pattern: "/api/v1/agent-releases/{id}/rollout", Perm: auth.PermAgentUpdate, Handler: s.handleRolloutRelease},
+		{Method: "GET", Pattern: "/api/v1/device-updates", Perm: auth.PermDevicesRead, Handler: s.handleListDeviceUpdates},
+		{Method: "POST", Pattern: "/api/v1/devices/{id}/update-channel", Perm: auth.PermDevicesManage, Handler: s.handleSetDeviceUpdateChannel},
 
 		{Method: "GET", Pattern: "/api/v1/jobs", Perm: auth.PermScriptsRead, Handler: s.handleListJobs},
 		{Method: "GET", Pattern: "/api/v1/jobs/{id}", Perm: auth.PermScriptsRead, Handler: s.handleGetJob},
@@ -140,6 +154,7 @@ func (s *Server) Routes() []Route {
 
 		{Method: "GET", Pattern: "/api/v1/channels", Perm: auth.PermPoliciesRead, Handler: s.handleListChannels},
 		{Method: "POST", Pattern: "/api/v1/channels", Perm: auth.PermPoliciesManage, Handler: s.handleCreateChannel},
+		{Method: "PUT", Pattern: "/api/v1/channels/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleUpdateChannel},
 		{Method: "DELETE", Pattern: "/api/v1/channels/{id}", Perm: auth.PermPoliciesManage, Handler: s.handleDeleteChannel},
 
 		// Agent-facing: no user session; each handler authenticates the
@@ -147,6 +162,7 @@ func (s *Server) Routes() []Route {
 		{Method: "POST", Pattern: "/agent/v1/enroll", Public: true, Handler: s.handleAgentEnroll},
 		{Method: "POST", Pattern: "/agent/v1/stats", Public: true, Handler: s.handleAgentStats},
 		{Method: "POST", Pattern: "/agent/v1/inventory", Public: true, Handler: s.handleAgentInventory},
+		{Method: "GET", Pattern: "/agent/v1/releases/{id}/download", Public: true, Handler: s.handleAgentReleaseDownload},
 	}
 }
 

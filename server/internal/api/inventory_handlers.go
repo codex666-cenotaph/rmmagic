@@ -96,7 +96,7 @@ func (s *Server) handleEffectivePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	eff := effectiveRulesJSON(policies, store.PolicyDeviceScope{
-		DeviceID: d.ID, SiteID: d.SiteID, CustomerID: d.CustomerID,
+		DeviceID: d.ID, SiteID: d.SiteID, CustomerID: d.CustomerID, Tags: d.Tags,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"rules": eff})
 }
@@ -121,7 +121,7 @@ func effectiveRulesJSON(policies []store.Policy, scope store.PolicyDeviceScope) 
 		}
 		cands = append(cands, cand{rank: scopeRank(pol.ScopeType), policy: pol, rules: rules})
 	}
-	for rank := 0; rank <= 3; rank++ {
+	for rank := 0; rank <= maxScopeRank; rank++ {
 		for _, c := range cands {
 			if c.rank != rank {
 				continue
@@ -139,6 +139,10 @@ func effectiveRulesJSON(policies []store.Policy, scope store.PolicyDeviceScope) 
 	return out
 }
 
+// maxScopeRank is the highest rank scopeRank returns; the merge loop
+// iterates ranks up to it. Mirrors alerts.ScopeRank.
+const maxScopeRank = 4
+
 func scopeRank(scopeType string) int {
 	switch scopeType {
 	case "tenant":
@@ -147,8 +151,10 @@ func scopeRank(scopeType string) int {
 		return 1
 	case "site":
 		return 2
-	case "device":
+	case "tag":
 		return 3
+	case "device":
+		return 4
 	}
 	return -1
 }

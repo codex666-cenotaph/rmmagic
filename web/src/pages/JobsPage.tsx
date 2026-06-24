@@ -17,6 +17,17 @@ export function JobStatusBadge({ status }: { status: api.JobStatus }) {
   return <span className={`badge ${STATUS_CLASS[status] ?? ""}`}>{status.replace("_", " ")}</span>;
 }
 
+// jobLabel describes what a job runs: a script by name, or a package
+// install/remove with its package list.
+export function jobLabel(j: api.Job): string {
+  if (j.kind === "package_install" || j.kind === "package_remove") {
+    const verb = j.kind === "package_install" ? "Install" : "Remove";
+    const pkgs = j.spec?.packages?.join(", ") ?? "";
+    return `${verb} ${pkgs}`;
+  }
+  return j.script_name ?? "script";
+}
+
 export function JobsPage() {
   const jobs = useQuery({
     queryKey: ["jobs"],
@@ -38,7 +49,7 @@ export function JobsPage() {
       <table className="data">
         <thead>
           <tr>
-            <th>Script</th>
+            <th>Action</th>
             <th>Device</th>
             <th>Status</th>
             <th>Origin</th>
@@ -50,7 +61,7 @@ export function JobsPage() {
         <tbody>
           {list.map((j) => (
             <tr key={j.id}>
-              <td>{j.script_name}</td>
+              <td>{jobLabel(j)}</td>
               <td>{j.hostname}</td>
               <td>
                 <JobStatusBadge status={j.status} />
@@ -81,7 +92,7 @@ function JobOutputDialog({ job, onClose }: { job: api.Job; onClose: () => void }
   });
 
   return (
-    <Modal title={`${job.script_name} on ${job.hostname}`} onClose={onClose}>
+    <Modal title={`${jobLabel(job)} on ${job.hostname}`} onClose={onClose}>
       <p>
         <JobStatusBadge status={job.status} />{" "}
         {output.data?.exit_code != null && (

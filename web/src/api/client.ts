@@ -132,6 +132,8 @@ export interface Device {
   arch: string;
   agent_version: string;
   status: DeviceStatus;
+  tags: string[];
+  update_channel: ReleaseChannel;
   online: boolean;
   last_seen_at: string | null;
   created_at: string;
@@ -277,6 +279,9 @@ export const getDeviceStats = (id: string, since?: string, until?: string) => {
   );
 };
 
+export const setDeviceTags = (id: string, tags: string[]) =>
+  request<{ tags: string[] }>("PUT", `/devices/${id}/tags`, { tags });
+
 export const decommissionDevice = (id: string) =>
   request<Record<string, never>>("POST", `/devices/${id}/decommission`);
 
@@ -333,17 +338,21 @@ export type JobStatus =
   | "timed_out"
   | "expired";
 
+export type JobKind = "script" | "package_install" | "package_remove";
+
 export interface Job {
   id: string;
-  script_id: string;
-  script_name: string;
+  kind: JobKind;
+  script_id?: string;
+  script_name?: string;
   device_id: string;
   hostname: string;
   command_id: string;
   status: JobStatus;
   timeout_s: number;
-  language: ScriptLanguage;
+  language?: ScriptLanguage;
   parameters: Record<string, string>;
+  spec?: { packages?: string[] };
   schedule_id?: string;
   created_at: string;
   expires_at: string;
@@ -526,13 +535,14 @@ export const refreshInventory = (deviceId: string) =>
 
 // ---- Policies ----
 
-export type PolicyScopeType = "tenant" | "customer" | "site" | "device";
+export type PolicyScopeType = "tenant" | "customer" | "site" | "device" | "tag";
 
 export interface Policy {
   id: string;
   name: string;
   scope_type: PolicyScopeType;
   scope_id: string | null;
+  scope_tag: string | null;
   enabled: boolean;
   rules: PolicyRules;
   channel_ids: string[];
@@ -573,6 +583,7 @@ export interface PolicyBody {
   name: string;
   scope_type: PolicyScopeType;
   scope_id?: string;
+  scope_tag?: string;
   enabled: boolean;
   rules: PolicyRules;
   channel_ids: string[];
@@ -661,8 +672,121 @@ export const listChannels = () =>
 export const createChannel = (body: ChannelBody) =>
   request<{ id: string }>("POST", "/channels", body);
 
+export const updateChannel = (id: string, body: ChannelBody) =>
+  request<void>("PUT", `/channels/${id}`, body);
+
 export const deleteChannel = (id: string) =>
   request<void>("DELETE", `/channels/${id}`);
+
+// ---- App deployment (apt/dnf package jobs) ----
+
+export type PackageOperation = "install" | "remove";
+
+export const deployApp = (body: {
+  operation: PackageOperation;
+  packages: string[];
+  target: JobTarget;
+  timeout_s?: number;
+  expires_in_s?: number;
+  confirm_token?: string;
+}) =>
+  request<{ job_ids: string[]; device_count: number }>(
+    "POST",
+    "/apps/deploy",
+    body,
+  );
+
+// ---- Agent releases & auto-update ----
+
+export type ReleaseChannel = "stable" | "beta";
+
+export interface AgentRelease {
+  id: string;
+  channel: ReleaseChannel;
+  version: string;
+  os: string;
+  arch: string;
+  url?: string;
+  has_binary: boolean;
+  sha256: string;
+  signature: string;
+  size_bytes: number;
+  notes: string;
+  created_at: string;
+}
+
+export interface DeviceUpdate {
+  device_id: string;
+  version: string;
+  phase:
+    | "offered"
+    | "downloading"
+    | "verified"
+    | "applied"
+    | "rolled_back"
+    | "failed";
+  error?: string;
+  offered_at: string;
+  updated_at: string;
+}
+
+export const listReleases = (channel?: ReleaseChannel) =>
+  request<{ releases: AgentRelease[] }>(
+    "GET",
+    `/agent-releases${channel ? `?channel=${channel}` : ""}`,
+  );
+
+export const createRelease = (body: {
+  channel: ReleaseChannel;
+  version: string;
+  os: string;
+  arch: string;
+  url?: string;
+  sha256: string;
+  signature: string;
+  size_bytes?: number;
+  notes?: string;
+}) => request<{ id: string }>("POST", "/agent-releases", body);
+
+// uploadReleaseBinary streams the signed binary to the server, which stores
+// it and serves it to agents behind device auth. Multipart, so it bypasses
+// the JSON `request` helper.
+export const uploadReleaseBinary = async (id: string, file: File) => {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${BASE}/agent-releases/${id}/binary`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!res.ok) {
+    let message = res.statusText || `Upload failed (${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data?.error) message = data.error;
+    } catch {
+      /* keep default */
+    }
+    throw new ApiError(res.status, message);
+  }
+  return (await res.json()) as { size_bytes: number };
+};
+
+export const rolloutRelease = (
+  id: string,
+  body: { target: JobTarget; confirm_token?: string },
+) =>
+  request<{ version: string; matched: number; online_offered: number }>(
+    "POST",
+    `/agent-releases/${id}/rollout`,
+    body,
+  );
+
+export const listDeviceUpdates = () =>
+  request<{ updates: DeviceUpdate[] }>("GET", "/device-updates");
+
+export const setUpdateChannel = (deviceId: string, channel: ReleaseChannel) =>
+  request<unknown>("POST", `/devices/${deviceId}/update-channel`, { channel });
 
 // ---- Audit ----
 

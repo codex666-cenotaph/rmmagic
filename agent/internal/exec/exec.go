@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/codex666-cenotaph/rmmagic/agent/internal/platform"
 )
 
 const outputCapBytes = 1 << 20 // 1 MiB
@@ -40,6 +42,73 @@ func ParseSpec(raw []byte) (ScriptSpec, error) {
 		return spec, err
 	}
 	return spec, nil
+}
+
+// PackageSpec is the JSON payload of COMMAND_KIND_PACKAGE_INSTALL and
+// COMMAND_KIND_PACKAGE_REMOVE. The install/remove choice is the command
+// kind, not a field, so a malformed spec can't flip the operation.
+type PackageSpec struct {
+	Packages []string `json:"packages"`
+}
+
+// ParsePackageSpec decodes a package command spec from its raw JSON bytes.
+func ParsePackageSpec(raw []byte) (PackageSpec, error) {
+	var spec PackageSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return spec, err
+	}
+	return spec, nil
+}
+
+// RunPackage installs or removes the spec's packages via the host package
+// manager, capping output the same way scripts are. install selects
+// install vs remove.
+func RunPackage(ctx context.Context, spec PackageSpec, install bool, timeoutS uint32) Result {
+	if timeoutS == 0 {
+		timeoutS = 600
+	}
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutS)*time.Second)
+	defer cancel()
+
+	if len(spec.Packages) == 0 {
+		return Result{Output: []byte("no packages specified"), ExitCode: 1, Err: errors.New("empty package list")}
+	}
+
+	started := time.Now()
+	var out []byte
+	var err error
+	if install {
+		out, err = platform.InstallPackages(runCtx, spec.Packages)
+	} else {
+		out, err = platform.RemovePackages(runCtx, spec.Packages)
+	}
+	finished := time.Now()
+
+	truncated := false
+	if len(out) > outputCapBytes {
+		out = out[:outputCapBytes]
+		truncated = true
+	}
+	r := Result{Output: out, Truncated: truncated, StartedAt: started, FinishedAt: finished}
+
+	if err != nil {
+		var exitErr *exec.ExitError
+		switch {
+		case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+			r.Err = context.DeadlineExceeded
+		case errors.As(err, &exitErr):
+			// Package manager ran but returned non-zero (e.g. package not
+			// found); surface the exit code, not an exec failure.
+			r.ExitCode = exitErr.ExitCode()
+		default:
+			// Manager missing / could not start: a real execution failure.
+			r.Err = err
+			if len(r.Output) == 0 {
+				r.Output = []byte(err.Error())
+			}
+		}
+	}
+	return r
 }
 
 // RunScript executes the script described by spec and returns the result.

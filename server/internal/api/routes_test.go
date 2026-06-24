@@ -20,6 +20,9 @@ func TestEveryRouteDeclaresAuthorization(t *testing.T) {
 		"POST /agent/v1/enroll":    true,
 		"POST /agent/v1/stats":     true,
 		"POST /agent/v1/inventory": true,
+		// Device-authenticated in-handler: Ed25519 signature over the
+		// request path (see handleAgentReleaseDownload).
+		"GET /agent/v1/releases/{id}/download": true,
 	}
 	seen := map[string]bool{}
 	known := map[auth.Permission]bool{PermSelf: true}

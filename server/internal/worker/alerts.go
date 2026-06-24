@@ -122,7 +122,7 @@ func (w *Worker) evaluateAlerts(ctx context.Context, tenantID uuid.UUID) error {
 // merges them. Policies with unparseable rules are skipped (they were
 // validated at write time; this guards old rows).
 func effectiveFor(log interface{ Error(string, ...any) }, policies []store.Policy, dev store.EvalDevice) alerts.Effective {
-	scope := store.PolicyDeviceScope{DeviceID: dev.DeviceID, SiteID: dev.SiteID, CustomerID: dev.CustomerID}
+	scope := store.PolicyDeviceScope{DeviceID: dev.DeviceID, SiteID: dev.SiteID, CustomerID: dev.CustomerID, Tags: dev.Tags}
 	var scoped []alerts.ScopedPolicy
 	for _, p := range policies {
 		if !p.Enabled || !p.AppliesTo(scope) {

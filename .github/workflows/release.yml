@@ -1,0 +1,99 @@
+name: Release
+
+# Builds signed agent binaries on a version tag, publishes them to a GitHub
+# Release, and emits an agent_releases registration manifest.
+#
+# Signing model (M6): the agent embeds a trusted Ed25519 public key at build
+# time and verifies a detached Ed25519 signature over the exact binary bytes
+# before swapping. The private key lives in the RMM_UPDATE_SIGNING_KEY secret
+# (PEM, generate with: openssl genpkey -algorithm ed25519 -out update_key.pem).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Load signing key
+        env:
+          RMM_UPDATE_SIGNING_KEY: ${{ secrets.RMM_UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$RMM_UPDATE_SIGNING_KEY" ]; then
+            echo "::error::RMM_UPDATE_SIGNING_KEY secret is not set; cannot sign release"
+            exit 1
+          fi
+          printf '%s' "$RMM_UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/update_key.pem"
+          # Derive the raw 32-byte Ed25519 public key (last 32 bytes of the
+          # DER SubjectPublicKeyInfo) and base64-encode it for the embed.
+          pub=$(openssl pkey -in "$RUNNER_TEMP/update_key.pem" -pubout -outform DER | tail -c 32 | base64 -w0)
+          echo "TRUSTED_UPDATE_KEYS=$pub" >> "$GITHUB_ENV"
+
+      - name: Build signed binaries and packages
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          # Strip a leading "v" from the tag for the package version.
+          export VERSION="${VERSION#v}"
+          agent/packaging/build.sh --targets "linux/amd64 linux/arm64 windows/amd64"
+
+      - name: Sign binaries and build registration manifest
+        run: |
+          set -euo pipefail
+          dist=agent/packaging/dist
+          key="$RUNNER_TEMP/update_key.pem"
+          repo="${{ github.repository }}"
+          tag="${{ github.ref_name }}"
+          manifest="$dist/agent_releases.json"
+          echo '{"channel":"stable","tag":"'"$tag"'","releases":[]}' > "$manifest"
+
+          declare -A platforms=(
+            ["rmmagent-linux-amd64"]="linux amd64"
+            ["rmmagent-linux-arm64"]="linux arm64"
+            ["rmmagent-windows-amd64.exe"]="windows amd64"
+          )
+          for fname in "${!platforms[@]}"; do
+            f="$dist/$fname"
+            [ -f "$f" ] || { echo "missing $f"; exit 1; }
+            read -r os arch <<<"${platforms[$fname]}"
+            openssl pkeyutl -sign -inkey "$key" -rawin -in "$f" -out "$f.sig"
+            sig=$(base64 -w0 "$f.sig")
+            sha=$(sha256sum "$f" | awk '{print $1}')
+            size=$(stat -c%s "$f")
+            url="https://github.com/$repo/releases/download/$tag/$fname"
+            tmp=$(mktemp)
+            jq --arg os "$os" --arg arch "$arch" --arg url "$url" \
+               --arg sha "$sha" --arg sig "$sig" --argjson size "$size" \
+               --arg version "${tag#v}" \
+               '.releases += [{"channel":"stable","version":$version,"os":$os,"arch":$arch,"url":$url,"sha256":$sha,"signature":$sig,"size_bytes":$size}]' \
+               "$manifest" > "$tmp" && mv "$tmp" "$manifest"
+          done
+          (cd "$dist" && sha256sum rmmagent-* > SHA256SUMS)
+          echo "Manifest:"; cat "$manifest"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            agent/packaging/dist/rmmagent-linux-amd64
+            agent/packaging/dist/rmmagent-linux-arm64
+            agent/packaging/dist/rmmagent-windows-amd64.exe
+            agent/packaging/dist/*.deb
+            agent/packaging/dist/*.rpm
+            agent/packaging/dist/SHA256SUMS
+            agent/packaging/dist/agent_releases.json
